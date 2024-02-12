@@ -80,12 +80,39 @@ def ConvertCtoOtoStr(c):
     return cc
 
 def ComputeTeq(StarTeff, StarRad, sep, Ab = 0.3, fprime = 1/4):
-    ''' from Seager 2016 Exoplanet Atmospheres eqn 3.9
+    ''' Given a star's Teff and Rad, compute the equil temp at the given separation.
+    from Seager 2016 Exoplanet Atmospheres eqn 3.9
     https://books.google.com/books?id=XpaYJD7IE20C
+
+    Args:
+        StarTeff (flt): Star's effective temperature
+        StarRad (astropy units object): Star's radius, must be an astropy units object
+        sep (astropy units object): Planet-Star separation, must be an astropy units object
+        Ab (flt): Bond albedo, default = 0.3
+        fprime (flt): function for describing hemisphere heat distribution, default = 1/4
+    Returns
+        flt: equilibrium temperature
     '''
     StarRad = StarRad.to(u.km)
     sep = sep.to(u.km)
     return (StarTeff * np.sqrt(StarRad/sep) * ((fprime * (1 - Ab))**(1/4))).value
+
+def ComputeSMA(Teq, StarTeff, StarRad, Ab = 0.3, fprime = 1/4):
+    ''' Given a star's Teff and Rad, compute the separation that gives the 
+        specified equil temp.
+
+    Args:
+        Teq (flt): planet's equilibrium temperature
+        StarTeff (flt): Star's effective temperature
+        StarRad (astropy units object): Star's radius, must be an astropy units object
+        Ab (flt): Bond albedo, default = 0.3
+        fprime (flt): function for describing hemisphere heat distribution, default = 1/4
+    Returns
+        astropy units object: Planet-Star separation, an astropy units object
+    '''
+    StarRad = StarRad.to(u.km)
+    sma = (StarTeff / Teq)**2 * ((fprime * (1 - Ab))**(1/2)) * StarRad
+    return sma.to(u.au)
 
 def GetPhaseAngle(MeanAnom, ecc, inc, argp):
     ''' Function for returning observed phase angle given orbital elements
@@ -125,10 +152,12 @@ def MakePTProflePlot(atm_df):
 
     return fig
 
-def GetPlanetFlux(PlanetWNO,PlanetFPFS,StarWNO,StarFlux):
+def GetPlanetFlux(PlanetWNO,PlanetFPFS,StarWNO,StarFlux, return_resampled_star_flux = False):
     from scipy.interpolate import interp1d
     func = interp1d(StarWNO,StarFlux,fill_value="extrapolate")
     ResampledStarFlux = func(PlanetWNO)
+    if return_resampled_star_flux:
+        return ResampledStarFlux*PlanetFPFS, PlanetWNO, ResampledStarFlux
     return ResampledStarFlux*PlanetFPFS
 
 def MakeAbundancesPlot(atm_df, n_mols_to_plot = 8):
@@ -257,6 +286,8 @@ def ComputeSpectrum(atm_df, pdict, sdict, specdict, calculation = 'planet',
         spec.star(opa_mon, temp = sdict['Teff'], metal = np.log10(sdict['mh']), logg = sdict['logg'], 
             radius = sdict['radius'], radius_unit = u.R_sun, 
             semi_major = pdict['semi_major'], semi_major_unit = pdict['semi_major_unit'], database = 'phoenix')
+        
+    StarWNO,StarFlux = spec.inputs['star']['wno'],spec.inputs['star']['flux']
 
     spec.atmosphere(df=atm_df)
 
@@ -316,8 +347,8 @@ def ComputeSpectrum(atm_df, pdict, sdict, specdict, calculation = 'planet',
                     bbox_inches='tight')
         plt.close()
         
+    
     if make4spectrumplot:
-        StarWNO,StarFlux = spec.inputs['star']['wno'],spec.inputs['star']['flux']
         fig = Make4SpectrumPlot(wno,alb,fpfs,StarWNO,StarFlux,colormap = 'magma')
         fig.savefig(savefiledirectory+'-4SpectrumPlot-R'+str(specdict['R'])+'.png',
                     bbox_inches='tight')
@@ -611,6 +642,7 @@ def MakeModelCloudFreePlanet(pdict, sdict,
     sdict.update({'flux_unit':'ergs cm^-2 s^-1 cm^-1'})
 
     # Pickle info and save:
+    #pickle.dump(pl, open(savefiledirectory+'/cloud-free-model.pkl','wb'))
     pickle.dump(noclouds, open(savefiledirectory+'/cloud-free-model.pkl','wb'))
     pickle.dump([pdict, sdict, cdict], open(savefiledirectory+'/cloud-free-model-inputs.pkl','wb'))
 
@@ -674,7 +706,6 @@ def MakeModelCloudFreePlanet(pdict, sdict,
 
 def MakeModelCloudyPlanet(savefiledirectory, clouddict, 
                           specdict,
-                          cloud_filename_prefix,
                           compute_spectrum = True,
                           saveplots = False,
                           calculation = 'planet',
@@ -727,10 +758,12 @@ def MakeModelCloudyPlanet(savefiledirectory, clouddict,
         # if no user-supplied molecules:
         #get virga recommendation for which gases to run
         # metallicitiy must be in NOT log units
-        recommended = vj.recommend_gas(pressure, temperature, 10**(metallicity_TEMP), 
-                                       clouddict['mean_mol_weight'],
-                        #Turn on plotting
-                         plot=False)
+        recommended = VirgaRecommendHack(pressure, temperature, 10**(metallicity_TEMP), 
+                                clouddict['mean_mol_weight'], plot=False, return_plot = False)
+        # recommended = vj.recommend_gas(pressure, temperature, 10**(metallicity_TEMP), 
+        #                                clouddict['mean_mol_weight'],
+        #                 #Turn on plotting
+        #                  plot=False)
         mols = recommended
         print('using virga recommended gas species:',recommended)
     else:
@@ -782,14 +815,14 @@ def MakeModelCloudyPlanet(savefiledirectory, clouddict,
 
     clouddict.update({'condensates':mols})
 
-    savefiledirectory = savefiledirectory+'/'
-    outdir = savefiledirectory+cloud_filename_prefix+'/'
-    os.system('mkdir '+ outdir)
+    # savefiledirectory = savefiledirectory+'/'
+    # outdir = savefiledirectory+cloud_filename_prefix+'/'
+    # os.system('mkdir '+ outdir)
 
-    pickle.dump([clouds, clouds_added],
-                    open(outdir+'-cloudy-model.pkl','wb'))
-    pickle.dump([pdict, sdict, cdict, clouddict],
-                open(outdir+'-cloudy-model-inputs.pkl','wb'))
+    # pickle.dump([clouds, clouds_added],
+    #                 open(outdir+'-cloudy-model.pkl','wb'))
+    # pickle.dump([pdict, sdict, cdict, clouddict],
+    #             open(outdir+'-cloudy-model-inputs.pkl','wb'))
     
     # If you want to compute spectrum here (recommended)
     if compute_spectrum:
@@ -798,34 +831,34 @@ def MakeModelCloudyPlanet(savefiledirectory, clouddict,
                                                                   pdict, sdict, specdict, 
                                                                   clouddict = clouddict,
                                                                   calculation = 'planet',
-                                                                  saveplots = saveplots, 
-                                                                  savefiledirectory = outdir, 
+                                                                  saveplots = False, 
+                                                                  #savefiledirectory = outdir, 
                                                                   ComputePlanetFlux = True, 
                                                                   make4spectrumplot = True,
                                                                   MixingRatioPlot = False,
                                                                   AbundancesPlot = False,
                                                                   PTplot = False)
         # dump it out:
-        outdict = {'wavenumber':wno, 'albedo spectrum':alb,
-                   'planet star contrast':fpfs, 'full output':full_output,
-                   'planet flux': PlanetFlux, 'star wavenumber':StarWNO, 'star flux':StarFlux}
-        pickle.dump(outdict, 
-                    open(outdir+'-spectrum-full-output-R'+str(specdict['R'])+'.pkl','wb'))
-        from scipy.interpolate import interp1d
-        func = interp1d(StarWNO,StarFlux,fill_value="extrapolate")
-        ResampledStarFlux = func(wno)
-        outdf = pd.DataFrame(data={'wavelength [um]':1e4/wno,
-                                   'planet flux [ergs/cm2/s/cm]':PlanetFlux,
-                                   'star flux [ergs/cm2/s/cm]':ResampledStarFlux,
-                                   'albedo':alb,
-                                   'planet-star contrast':fpfs }
-                             )
-        outdf.to_csv(outdir+'-spectrum-R'+str(specdict['R'])+'.csv', index=False, sep=' ')
+        # outdict = {'wavenumber':wno, 'albedo spectrum':alb,
+        #            'planet star contrast':fpfs, 'full output':full_output,
+        #            'planet flux': PlanetFlux, 'star wavenumber':StarWNO, 'star flux':StarFlux}
+        # pickle.dump(outdict, 
+        #             open(outdir+'-spectrum-full-output-R'+str(specdict['R'])+'.pkl','wb'))
+        # from scipy.interpolate import interp1d
+        # func = interp1d(StarWNO,StarFlux,fill_value="extrapolate")
+        # ResampledStarFlux = func(wno)
+        # outdf = pd.DataFrame(data={'wavelength [um]':1e4/wno,
+        #                            'planet flux [ergs/cm2/s/cm]':PlanetFlux,
+        #                            'star flux [ergs/cm2/s/cm]':ResampledStarFlux,
+        #                            'albedo':alb,
+        #                            'planet-star contrast':fpfs }
+        #                      )
+        # outdf.to_csv(outdir+'-spectrum-R'+str(specdict['R'])+'.csv', index=False, sep=' ')
     f.close()
     # GenerateInitialReadMe(savefiledirectory,planettype,T_star,r_star,Teq_str,semi_major,radius,massj,
     #                planet_mh,planet_mh_CtoO,phase,pdict,sdict,cdict,specdict,recommended)
 
-    return clouds, clouds_added
+    return clouds, clouds_added, wno, alb, fpfs, full_output, PlanetFlux, StarWNO, StarFlux
 
 
 
@@ -1127,6 +1160,67 @@ def MakeModelCloudFreePlanetWithDisEqChemKZZHack(pdict, sdict,
 
 
 def GenerateInitialReadMe(savefiledirectory,planettype,T_star,r_star,Teq_str,semi_major,radiusj,massj,
+                   planet_mh,planet_mh_CtoO,phase,pdict,sdict,cdict,specdict,recommended):
+    import time
+    t = time.localtime()
+    outtime = str(t.tm_year)+'-'+str(t.tm_mon)+'-'+str(t.tm_mday)+'-'+str(t.tm_hour)+':'+str(t.tm_min)+':'+str(t.tm_sec)
+
+    readme = f'''
+    ReflectX Gas Giant Picaso model 
+    -------------------------------
+    generated {outtime} in python 3.8 
+    Consult www.loganpearcescience/reflectx.html for more details 
+
+    Model: 
+     - Planet type: {planettype} 
+     - Star T_eff [K]: {T_star} 
+     - Star radius [Rsun]: {r_star} 
+     - Planet Eq Temp [K]: {int(Teq_str)} 
+     - Planet semi-major axis [au]: {semi_major} 
+     - Planet radius [Rjup]: {radiusj} 
+     - Planet mass [Mjup]: {massj} 
+     - Planet metallicity: {planet_mh} 
+     - Planet C/O ratio: {planet_mh_CtoO} 
+     - Phase: {phase} 
+
+    Picaso input parameters: 
+    These dictionaries are in machine-readable format (pickle) in '/cloud-free-model-inputs.pkl' 
+    To read them in, run: `pdict, sdict, cdict = pickle.load(open(path_to_model+'/cloud-free-model-inputs.pkl','rb'))` 
+     - Planet Properties Dictionary: {pdict} 
+     - Star Properties Dictionary: {sdict} 
+     - Climate Run Parameters Dictionary: {cdict} 
+     - Spectrum Calculation Dictionary: {specdict} 
+
+    Virga-recommended condensation gases: {recommended} 
+
+    DIRECTORY CONTENTS:
+    ------------------
+
+    Cloud-free full PICASO output located in '/cloud-free-model.pkl'
+    To read it in: `model = pickle.load(open(path_to_model+'/cloud-free-model.pkl','rb'))`
+
+    Cloud-free spectrum located in '/cloud-free-spectrum-full-output-R'+str(specdict['R'])': 
+     - Machine readable pickle file: `spectrum_dictionary = pickle.load(open(path_to_model+'/cloud-free-spectrum-full-output-R'+str(specdict['R']+'.pkl'), 'rb'))`
+     - Human and machine readable csv: `spectrum_df = pandas.read_csv(path_to_model+'/cloud-free-spectrum-full-output-R'+str(specdict['R'])+'.csv', delim_whitespace=True)`
+
+    `/terminal-output.txt`: A text file containing terminal output during the run. Useful for assessing
+     model convergence.
+
+    Plots:
+
+     - `4SpectrumPlot`: plot of planet albedo spectrum, planet contrast (Fp/Fs), stellar spectrum, and planet spectrum (Fp/Fs * Fs)
+     - `Abundances`: molecular abundances of the 8 most abundant molecules as a function of pressure (altitude)
+     - `PTprofile`: Pressure/Temperature profile from climate calculation
+     - `recommended-gases.html`: plot of PT profile against gas condensation curves with the gases used in the spectrum identified with heavy lines
+     - `mixing-ratios.html`: mixing ratios for every gas as a function of pressure
+
+    '''
+    k = open(savefiledirectory+'/readme.txt','w')
+    k.write(readme)
+    k.close()
+
+
+def GenerateTerrestrialPlanetReadMe(savefiledirectory,planettype,T_star,r_star,Teq_str,semi_major,radiusj,massj,
                    planet_mh,planet_mh_CtoO,phase,pdict,sdict,cdict,specdict,recommended):
     import time
     t = time.localtime()

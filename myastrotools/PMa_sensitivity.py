@@ -17,7 +17,7 @@ where NAME is a Simbad-resolvable name of object.
 """
 import argparse
 
-parser = argparse.ArgumentParser(description='Process some integers.')
+parser = argparse.ArgumentParser()
 parser.add_argument('SimbadNAME', metavar='N',
                     help='Simbad Resolvable Object Name')
 

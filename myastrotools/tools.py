@@ -2451,6 +2451,74 @@ def calc_accel(a,T,to,e,i,w,O,date,dist, solvefunc = solve):
     return Xddot*(u.km/u.yr/u.yr).to((u.m/u.s/u.yr)), Yddot*(u.km/u.yr/u.yr).to((u.m/u.s/u.yr)), \
                     Zddot*(u.km/u.yr/u.yr).to((u.m/u.s/u.yr))
 
+
+def ThieleInnesToCampbell(A,B,F,G,Aerr = None, Berr = None, Ferr = None, Gerr = None):
+    ''' Convert TI elements to Campbell orbital elements
+    '''
+    uu = (A**2 + B**2 + F**2 + G**2) / 2
+    v = A*G - B*F
+    sma = np.sqrt( uu + np.sqrt((uu+v)*(uu-v)) )
+
+    wplusO = np.arctan2( (B-F),(A+G) ) % 2*np.pi
+    wminusO = np.arctan2( (B+F),(G-A) ) % 2*np.pi
+    #assert np.sign(np.sin(wplusO)) == np.sign((B-F))
+    #assert np.sign(np.sin(wminusO)) == np.sign((-B-F))
+
+    argp = np.degrees( ((wplusO + wminusO) / 2) )
+    lan = np.degrees( ((wplusO - wminusO) / 2) )
+
+    d1 = np.abs( (A+G)*np.cos(wminusO) )
+    d2 = np.abs( (F-B)*np.sin(wminusO) )
+    if d1 >= d2:
+        inc = 2*np.arctan( np.sqrt( np.abs((A-G)*np.cos(wplusO))/d1 ) )
+    else:
+        inc = 2*np.arctan( np.sqrt( np.abs((B+F)*np.sin(wplusO))/d2 ) )
+    
+    if Aerr:
+        # uncertainties
+        tA = A + (A*u - G*v)/np.sqrt(uu**2 - v**2)
+        tB = B + (B*u + F*v)/np.sqrt(uu**2 - v**2)
+        tF = F + (F*u + B*v)/np.sqrt(uu**2 - v**2)
+        tG = G + (G*u - A*v)/np.sqrt(uu**2 - v**2)
+    
+        smaerr = (2*sma)**(-1) * ((tA*Aerr)**2 + (tB*Berr)**2 + (tF*Ferr)**2 + (tG*Gerr)**2 
+                                  
+                                )
+        
+    return sma, np.degrees(inc), argp, lan
+
+
+def GetGaiaOrbitalElementsForNSS(GaiaDR3_sourceid):
+    ''' For solutions in Gaia DR3 Non-single star catalog (NSS) with solution type "Orbital",
+    query the NSS catalog, retrieve Thiele Innes elements, anf convert them to Campbell elements.
+
+    Args:
+        GaiaDR3_sourceid (str): Gaia DR3 source id
+
+    Returns:
+        dict: Campbell elements
+    '''
+    from astroquery.vizier import Vizier
+    from myastrotools.tools import ThieleInnesToCampbell
+    # Gaia NSS catalog number:
+    cat = 'I/357'
+    result = Vizier.query_object("Gaia DR3 "+GaiaDR3_sourceid, catalog=cat)
+    r = result[0]
+    A,B,F,G = r['ATI'][0],r['BTI'][0],r['FTI'][0],r['GTI'][0]
+    ecc = r['ecc'][0]
+    T0 = 2016.0 + (r['Tperi'][0]*u.d.to(u.yr)) # # days since 2016.0
+    P = r['Per'][0]*u.d.to(u.yr) # years
+    sma, inc, argp, lan = ThieleInnesToCampbell(A,B,F,G,Aerr = None, Berr = None, Ferr = None, Gerr = None)
+    elements = {"sma [arcsec]":sma,
+                'ecc':ecc,
+                'inc [deg]':inc,
+                'argp [deg]': argp,
+                'lan [deg]': lan,
+                'T0 [yr]': T0,
+                'P [yr]': P
+               }
+    return elements
+
 ###################################################################
 # OFTI specific functions:
 
@@ -2607,7 +2675,7 @@ def keplerian_to_cartesian(sma,ecc,inc,argp,lon,meananom,kep, solvefunc = solve)
         Returns:
             pos (3xN arr) [au]: position in xyz coords in au, with 
                         x = pos[0], y = pos[1], z = pos[2] for each of N orbits
-                        +x = +Dec, +y = +RA, +z = towards observer
+                        +x = -RA, +y = +Dec, +z = towards observer
             vel (3xN arr) [km/s]: velocity in xyz plane.
             acc (3xN arr) [km/s/yr]: acceleration in xyz plane.
         Written by Logan Pearce, 2019, inspired by Sarah Blunt
@@ -4740,7 +4808,7 @@ class NIRC2JFilter(object):
         file = '/Users/loganpearce/Dropbox/astro_packages/myastrotools/myastrotools/filter_curves/nirc2_j.csv'
         f = pd.read_csv(file, comment='#')
         self.wavelength = np.array(f['Wavelength'])
-        self.transmission = np.array(f['Transmission']) / 100
+        self.transmission = (np.array(f['Transmission']) / np.max(np.array(f['Transmission'])))/ 100
         self.wavelength_unit = u.um
         self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
         eff_wavelength = np.round(np.sum(self.transmission) / np.sum(self.transmission * (1/self.wavelength**2)), 
@@ -4762,7 +4830,7 @@ class NIRC2HFilter(object):
         file = '/Users/loganpearce/Dropbox/astro_packages/myastrotools/myastrotools/filter_curves/nirc2_h.csv'
         f = pd.read_csv(file, comment='#')
         self.wavelength = np.array(f['Wavelength'])
-        self.transmission = np.array(f['Transmission']) / 100
+        self.transmission = (np.array(f['Transmission'])  / np.max(np.array(f['Transmission']))) / 100
         self.wavelength_unit = u.um
         self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
         eff_wavelength = np.round(np.sum(self.transmission) / np.sum(self.transmission * (1/self.wavelength**2)), 
@@ -4783,8 +4851,8 @@ class NIRC2KFilter(object):
         file = os.path.join(os.path.dirname(__file__), 'filter_curves/nirc2_k.csv')
         f = pd.read_csv(file, comment='#')
         self.wavelength = np.array(f['Wavelength'])
-        self.transmission = np.array(f['Transmission']) / 100
-        self.wavelength_unit = r'$\mu$m'
+        self.transmission = (np.array(f['Transmission'])  / np.max(np.array(f['Transmission']))) / 100
+        self.wavelength_unit = u.um
         self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
         eff_wavelength = np.round(np.sum(self.transmission) / np.sum(self.transmission * (1/self.wavelength**2)), 
                           decimals = 3)
@@ -4883,7 +4951,7 @@ class NIRC2MsFilter(object):
         file = os.path.join(os.path.dirname(__file__), 'filter_curves/nirc2_Ms.csv')
         f = pd.read_csv(file, comment='#')
         self.wavelength = np.array(f['Wavelength'])
-        self.transmission = np.array(f['Transmission']) / 100
+        self.transmission = np.array(f['Transmission']) / 100 
         self.wavelength_unit = r'$\mu$m'
         self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
         eff_wavelength = np.round(np.sum(self.transmission) / np.sum(self.transmission * (1/self.wavelength**2)), 
@@ -4903,7 +4971,7 @@ class SloangFilter(object):
         file = os.path.join(os.path.dirname(__file__), 'filter_curves/SLOAN_SDSS.gprime_filter.dat')
         f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
         self.wavelength = np.array(f['wavelength'])
-        self.transmission = np.array(f['transmission'])
+        self.transmission = np.array(f['transmission']) / np.max(np.array(f['transmission']))
         self.wavelength_unit = u.AA
         self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
         eff_wavelength = np.round(np.sum(self.transmission) / np.sum(self.transmission * (1/self.wavelength**2)), 
@@ -4924,7 +4992,7 @@ class SloaniFilter(object):
         file = os.path.join(os.path.dirname(__file__), 'filter_curves/SLOAN_SDSS.iprime_filter.dat')
         f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
         self.wavelength = np.array(f['wavelength'])
-        self.transmission = np.array(f['transmission'])
+        self.transmission = np.array(f['transmission']) / np.max(np.array(f['transmission']))
         self.wavelength_unit = u.AA
         self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
         eff_wavelength = np.round(np.sum(self.transmission) / np.sum(self.transmission * (1/self.wavelength**2)), 
@@ -4945,7 +5013,7 @@ class SloanrFilter(object):
         file = os.path.join(os.path.dirname(__file__), 'filter_curves/SLOAN_SDSS.rprime_filter.dat')
         f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
         self.wavelength = np.array(f['wavelength'])
-        self.transmission = np.array(f['transmission'])
+        self.transmission = np.array(f['transmission']) / np.max(np.array(f['transmission']))
         self.wavelength_unit = u.AA
         self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
         eff_wavelength = np.round(np.sum(self.transmission) / np.sum(self.transmission * (1/self.wavelength**2)), 
@@ -4966,7 +5034,7 @@ class SloanuFilter(object):
         file = os.path.join(os.path.dirname(__file__), 'filter_curves/SLOAN_SDSS.uprime_filter.dat')
         f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
         self.wavelength = np.array(f['wavelength'])
-        self.transmission = np.array(f['transmission'])
+        self.transmission = np.array(f['transmission'])  / np.max(np.array(f['transmission']))
         self.wavelength_unit = u.AA
         self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
         eff_wavelength = np.round(np.sum(self.transmission) / np.sum(self.transmission * (1/self.wavelength**2)), 
@@ -4988,7 +5056,7 @@ class SloanzFilter(object):
         file = "/Users/loganpearce/Dropbox/astro_packages/myastrotools/myastrotools/filter_curves/Sloan_z.txt"
         f = pd.read_csv(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
         self.wavelength = np.array(f['wavelength'])
-        self.transmission = np.array(f['transmission']) / 100
+        self.transmission = ( np.array(f['transmission'])  / np.max(np.array(f['transmission']))) / 100
         self.wavelength_unit = u.nm
         self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
         eff_wavelength = np.round(np.sum(self.transmission) / np.sum(self.transmission * (1/self.wavelength**2)), 
@@ -5119,7 +5187,7 @@ def ComputeFluxRatio(Rp, sep, alpha, Ag = 0.5):
     angleterm = (np.sin(alpha) + (np.pi - alpha)*np.cos(alpha)) / np.pi
     Rp = Rp.to(u.km)
     sep = sep.to(u.km)
-    C = (2/3) * Ag * ((Rp / sep)**2) * angleterm
+    C = Ag * ((Rp / sep)**2) * angleterm
     return C
     
 
@@ -5363,6 +5431,121 @@ def GetPhaseAngle(MeanAnom, ecc, inc, argp):
     Alpha = np.arccos( np.sin(inc) * np.sin(TrueAnom + argp) )
     
     return np.degrees(Alpha)
+
+
+def alphas(inc, phis):
+    '''
+    From Lovis+ 2017 sec 2.1:<br>
+    $\cos(\alpha) = - \sin(i) \cos(\phi)$<br>
+    where $i$ is inclination and $\phi$ is orbital phase with $\phi= 0$ at inferior conjunction
+
+    args:
+        inc [flt]: inclination in degrees
+        phis [arr]: array of phi values from zero to 360 in degrees
+
+    returns:
+        arr: array of viewing phase angles for an orbit from inferior conjunction back to 
+            inferior conjunction
+    '''
+    alphs = []
+    for phi in phis:
+        alphs.append(np.degrees(np.arccos(-np.sin(np.radians(inc)) * np.cos(np.radians(phi)))))
+    return alphs
+
+
+
+def GetPhasesFromOrbit(sma,ecc,inc,argp,lon,Ms,Mp):
+    ''' Creates an array of viewing phases for an orbit in the plane of the sky to the observer with the maximum phase
+     (faintest contrast) at inferior conjunction (where planet is aligned between star and observer) and minimum phase 
+     (brightest) at superior conjunction.
+
+    args:
+        sma [flt]: semi-major axis in au 
+        ecc [flt]: eccentricity
+        inc [flt]: inclination in degrees
+        argp [flt]: argument of periastron in degrees
+        lon [flt]: longitude of ascending node in degrees
+        Ms [flt]: star mass in solar masses
+        Mp [flt]: planet mass in Jupiter masses
+
+    returns:
+        arr: array of viewing phases from periastron back to periastron.
+
+    '''
+    # Getting phases for the orbit described by the mean orbital params:
+    import astropy.units as u
+    from myastrotools.tools import keplerian_to_cartesian, keplersconstant
+    # Find the above functions here: https://github.com/logan-pearce/myastrotools/blob/2bbc284ab723d02b7a7189494fd3eabaed434ce1/myastrotools/tools.py#L2593
+    # and here: https://github.com/logan-pearce/myastrotools/blob/2bbc284ab723d02b7a7189494fd3eabaed434ce1/myastrotools/tools.py#L239
+    # Make lists to hold results:
+    xskyplane,yskyplane,zskyplane = [],[],[]
+    phase = []
+    # How many points to compute:
+    Npoints = 1000
+    # Make an array of mean anomaly:
+    meananom = np.linspace(0,2*np.pi,Npoints)
+    # Compute kepler's constant:
+    kepmain = keplersconstant(Ms*u.Msun, Mp*u.Mjup)
+    # For each orbit point:
+    for m in meananom:
+        # compute 3d projected position:
+        pos, vel, acc = keplerian_to_cartesian(sma*u.au,ecc,inc,argp,lon,m,kepmain)
+        # add to list:
+        xskyplane.append(pos[0].value)
+        yskyplane.append(pos[1].value)
+        zskyplane.append(pos[2].value)
+
+    ##### Getting the phases as a function of mean anom: ###########
+    ###### Loc of inf conj:
+    # Find all points with positive z -> out of sky plane:
+    towardsobsvers = np.where(np.array(zskyplane) > 0)[0]
+    # mask everything else:
+    maskarray = np.ones(Npoints) * 99999
+    maskarray[towardsobsvers] = 1
+    # mask x position:
+    xtowardsobsvers = np.array(xskyplane)*maskarray
+    # find where x position is minimized in the section of orbit towards the observer:
+    infconj_ind = np.where( np.abs(xtowardsobsvers) == min(np.abs(xtowardsobsvers)) )[0][0]
+    ###### Loc of sup conj:
+    # Do the opposite - find where x in minimized for points into the plane/away from observer
+    awayobsvers = np.where(np.array(zskyplane) < 0)[0]
+    maskarray = np.ones(Npoints) * 99999
+    maskarray[awayobsvers] = 1
+    xawayobsvers = np.array(xskyplane)*maskarray
+    supconj_ind = np.where( np.abs(xawayobsvers) == min(np.abs(xawayobsvers)) )[0][0]
+
+    #### Find max and min value phases for this inclination:
+    phis = np.linspace(0,180,Npoints)
+    phases = np.array(alphas(inc,phis))
+    minphase = min(phases)
+    maxphase = max(phases)
+    # Generate empty phases array:
+    phases_array = np.ones(Npoints)
+
+    ###### Set each side of the phases array to range from min to max phase on either side of 
+    # inf/sup conjunctions:
+    if supconj_ind > infconj_ind:
+        # Set one side of the phases array to phases from max to min
+        phases_array[0:len(xskyplane[infconj_ind:supconj_ind])] = np.linspace(maxphase,minphase,
+                                                            len(xskyplane[infconj_ind:supconj_ind]))
+        # # Set the other side to phases from min to max
+        phases_array[len(xskyplane[infconj_ind:supconj_ind]):] = np.linspace(minphase,maxphase,
+                                                            len(xskyplane)-len(xskyplane[infconj_ind:supconj_ind]))
+        # Finally roll the array to align with the mean anomaly array:
+        phases_array = np.roll(phases_array,infconj_ind)
+
+
+    else:
+        # Set one side of the phases array to phases from min to max
+        phases_array[0:len(xskyplane[supconj_ind:infconj_ind])] = np.linspace(minphase,maxphase,
+                                                            len(xskyplane[supconj_ind:infconj_ind]))
+        # # Set the other side to phases from max to min
+        phases_array[len(xskyplane[supconj_ind:infconj_ind]):] = np.linspace(maxphase,minphase,
+                                                            len(xskyplane)-len(xskyplane[supconj_ind:infconj_ind]))
+        # Finally roll the array to align with the mean anomaly array:
+        phases_array = np.roll(phases_array,supconj_ind)
+
+    return xskyplane, yskyplane, zskyplane, phases_array
 
 
 
