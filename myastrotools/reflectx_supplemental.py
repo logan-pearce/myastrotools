@@ -731,6 +731,14 @@ def GetPhotonsPerSec(wavelength, flux, filt, distance, radius, primary_mirror_di
     
     return total_flux_in_photons_sec * (1/u.s)
 
+def FluxLambda0(spectrum_wavelength,spectrum_flux, lambda_0):
+    from scipy.interpolate import interp1d
+    # create the interpolation function:
+    interpfunc = interp1d(spectrum_wavelength,spectrum_flux, fill_value="extrapolate")
+    # Interpolate the filter's central wavelength in the spectrum's flux array:
+    F_lambda_0 = interpfunc(lambda_0)
+    return F_lambda_0
+
 def GetFofLambdaNaught(wavelength,flux,filt):
     ''' For a specific filter object and spectrum, get the 
     flux at the central wavelength

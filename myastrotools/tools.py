@@ -85,10 +85,33 @@ def CenteredDistanceMatrix(nx, ny = None):
     r=np.hypot(xx,yy)
     return r
 
-def circle_mask(radius, xsize, ysize, xc, yc, radius_format = 'pixels', cval = 0):
+def OffCenterDistanceMatrix(xc, yc, nx, ny):
+    ''' Creates 2d array of the distance of each element from the center
+
+    Parameters
+    ----------
+        n : flt
+            x-dimension of 2d array
+        ny : flt (optional)
+            optional y-dimension of 2d array.  If not provided, array is square of dimension nxn
+    
+    Returns
+    -------
+        2d matrix of distance from center
+    '''
+    xx,yy = np.meshgrid(np.arange(nx)-xc,np.arange(ny)-yc)
+    r=np.hypot(xx,yy)
+    return r
+
+def circle_mask(radius, xsize, ysize, xc, yc):
     xx,yy = np.meshgrid(np.arange(xsize)-xc,np.arange(ysize)-yc)
     r=np.hypot(xx,yy)
     return np.where(r<radius)
+
+def circle_mask_outer(radius, xsize, ysize, xc, yc):
+    xx,yy = np.meshgrid(np.arange(xsize)-xc,np.arange(ysize)-yc)
+    r=np.hypot(xx,yy)
+    return np.where(r>radius)
 
 ############################################################################################################
 ############################################# Astrometry ###################################################
@@ -409,6 +432,10 @@ def UVW_to_propermotions(UVW,R,D,plx):
     B_pmdec = M[2] * plx / k
     return B_RV,B_pmra,B_pmdec
 
+############################################################################################################
+################## Functions for common proper motion arguements ###########################################
+############################################################################################################
+
 def deproject_apparent_velocities(sourceid1,sourceid2, pmra = [], pmdec = [], rv = [], \
                                   catalog='gaiaedr3.gaia_source', return_old_vels = False):
     ''' For widely separated binaries for which projection effects might be significant, "deproject"\
@@ -482,10 +509,6 @@ def deproject_apparent_velocities(sourceid1,sourceid2, pmra = [], pmdec = [], rv
         return new_pmra, new_pmdec, new_rv, (PR, sig_PR), (PD, sig_PD), (RV, sig_RV)
     
     return new_pmra, new_pmdec, new_rv
-
-############################################################################################################
-################## Functions for common proper motion arguements ###########################################
-############################################################################################################
 
 def are_projection_effects_relevant(sourceid1,sourceid2):
     from myastrotools.tools import physical_separation
@@ -1072,6 +1095,18 @@ def FnuToFlambInPhotons(Fnu, lamb, returnvalueonly = False):
     else:
         return flamb.value*1/u.cm**2/u.s/u.AA
 
+def FlambToFlambInPhotons(Flamb, lamb, returnvalueonly = False):
+    '''[Y photon/cm^2/s/A]          = 5.03411250E+07 * [X1 erg/cm^2/s/A] * [X2 A]'''
+    import astropy.units as u
+    Flamb = Flamb.to(u.erg/(u.cm)**2/u.s/u.AA)
+    lamb = lamb.to(u.AA)
+    Plamb = Flamb * 5.03411250e07 * lamb
+    if returnvalueonly:
+        return Plamb.value
+    else:
+        return Plamb.value*1/u.cm**2/u.s/u.AA
+
+
 
 
 ############################################################################################################
@@ -1509,14 +1544,14 @@ def get_distance(source_ids, catalog = 'gaiaedr3.gaia_source'):
         for source_id in source_ids:
             job = Gaia.launch_job("SELECT * FROM "+catalog+" WHERE source_id = "+str(source_id))
             j = job.get_results()
-            di,ei = distance(np.array(j['parallax']),np.array(j['parallax_error']))
+            di,ei = distance(np.array(j['parallax'][0]),np.array(j['parallax_error'][0]))
             d = np.append(d,di)
             e = np.append(e,ei)
             print('For',source_id,'d=',[di,ei])
     except:
         job = Gaia.launch_job("SELECT * FROM "+catalog+" WHERE source_id = "+str(source_ids))
         j = job.get_results()
-        d,e = distance(np.array(j['parallax']),np.array(j['parallax_error']))
+        d,e = distance(np.array(j['parallax'][0]),np.array(j['parallax_error'][0]))
     return d,e
 
 def get_gmag(source_ids, catalog = 'gaiaedr3.gaia_source'):
@@ -1711,7 +1746,9 @@ def gamma(Pbar):
 # Written by Kervella:
 def zetafunc(P):
     from astropy.io import ascii
-    zetval = ascii.read('../zeta-values.csv')
+    file = os.path.join(os.path.dirname(__file__), 'zeta-values.csv')
+    #zetval = ascii.read('/Users/loganpearce/Dropbox/astro_packages/myastrotools/myastrotools/zeta-values.csv')
+    zetval = ascii.read(file)
     zet = np.interp(np.array(P), np.array(zetval['P/T']), np.array(zetval['zeta']))
     zet_errplus = np.interp(np.array(P), np.array(zetval['P/T']), np.array(zetval['zeta_errplus']))
     zet_errminus = np.interp(np.array(P), np.array(zetval['P/T']), np.array(zetval['zeta_errminus']))
@@ -1737,12 +1774,15 @@ def mBr_function(starmass, dvel_norm, dvel_norm_err, r,\
     return r, mBr, mBrmin, mBrmax
 
 
-def MakeKervellaPMaPlot(HIP, distance):
+def MakeKervellaPMaPlot(HIP):
     from myastrotools.tools import mBr_function
+    from astroquery.vizier import Vizier
+    v = Vizier(catalog="J/A+A/657/A7")
     radius = 1
     result = v.query_object("HIP "+str(HIP), radius=radius*u.arcsec)
     dVt = result[0]['dVt']
     m1 = result[0]['M1']
+    distance = 1000/result[0]['PlxG3']
 
     minAU = 0.5
     maxAU = 200
@@ -1772,7 +1812,7 @@ def MakeKervellaPMaPlot(HIP, distance):
     #ax1.set_ylim(top=1e3)
     plt.tight_layout()
     
-    return fig, mBr
+    return fig, mBr, r_as
 
 ############################################################################################################
 ########################################### Orbit Tools ####################################################
@@ -1856,10 +1896,16 @@ def impact_parameter(vinf,M,R):
     e = ecc(vinf,M,R)
     return -a*np.sqrt(e**2-1)
 
-def ComputeChi2(array, measurements):
-    chi = 0
-    for i in range(len(array)):
-        chi += ( (array[i][0] - measurements[i]) / array[i][1] ) ** 2
+def ComputeChi2(data, model):
+    ''' 
+    Args:
+        data (2xN array): 2xN arrays where data[0] is the mean and data[1] is the std dev of observations and N is
+            the number of observations
+        model (1xN array): model observations to compare to
+    Returns:
+        flt: chi^2 value
+    '''
+    chi = np.sum(((data[0] - model)/data[1])**2)
     return chi
 
 def t0_to_tau(t0, period, ref_epoch = 2015.5):
@@ -2360,7 +2406,7 @@ def calc_velocities(a,T,to,e,i,w,O,date,dist, solvefunc = solve):
     '''
     import numpy as np
     import astropy.units as u
-    from orbittools.orbittools import as_to_km2, solve
+    from myastrotools.tools import as_to_km2, solve
     from numpy import tan, arctan, sqrt, cos, sin, arccos
     
     # convert to km:
@@ -2675,7 +2721,7 @@ def keplerian_to_cartesian(sma,ecc,inc,argp,lon,meananom,kep, solvefunc = solve)
         Returns:
             pos (3xN arr) [au]: position in xyz coords in au, with 
                         x = pos[0], y = pos[1], z = pos[2] for each of N orbits
-                        +x = -RA, +y = +Dec, +z = towards observer
+                        +x = +Dec, +y = +RA, +z = towards observer
             vel (3xN arr) [km/s]: velocity in xyz plane.
             acc (3xN arr) [km/s/yr]: acceleration in xyz plane.
         Written by Logan Pearce, 2019, inspired by Sarah Blunt
@@ -2686,9 +2732,9 @@ def keplerian_to_cartesian(sma,ecc,inc,argp,lon,meananom,kep, solvefunc = solve)
     # Compute mean motion and eccentric anomaly:
     meanmotion = np.sqrt(kep / sma**3).to(1/u.s)
     try:
-        E = solve(eccentricity_anomaly, meananom, ecc, 0.001)
+        E = solvefunc(eccentricity_anomaly, meananom, ecc, 0.001)
     except:
-        nextE = [solve(eccentricity_anomaly, varM,vare, 0.001) for varM,vare in zip(meananom, ecc)]
+        nextE = [solvefunc(eccentricity_anomaly, varM,vare, 0.001) for varM,vare in zip(meananom, ecc)]
         E = np.array(nextE)
 
     # Compute position:
@@ -2969,6 +3015,43 @@ def kepler_advancer2(ro, vo, t, k, to = 0):
     
     return new_r*u.m, new_v*(u.m/u.s)
 
+
+def keplerian_to_cartesian_planeoforbit(sma,ecc,meananom,kep):
+    """ Given a set of Keplerian orbital elements, returns the observable 3-dimensional position, velocity, 
+        and acceleration at the specified time.  Accepts and arbitrary number of input orbits.  Semi-major 
+        axis must be an astropy unit object in physical distance (ex: au, but not arcsec).  The observation
+        time must be converted into mean anomaly before passing into function.
+        Inputs:
+            sma (1xN arr flt) [au]: semi-major axis in au, must be an astropy units object
+            ecc (1xN arr flt) [unitless]: eccentricity
+            meananom (1xN arr flt) [radians]: mean anomaly 
+            kep (1xN arr flt): kepler constant = mu/m where mu = G*m1*m2 and m = [1/m1 + 1/m2]^-1 . 
+                        In the limit of m1>>m2, mu = G*m1 and m = m2
+        Returns:
+            pos (3xN arr) [au]: position in xyz coords in au, with 
+                        x = pos[0], y = pos[1], z = pos[2] for each of N orbits
+                        +x = -RA, +y = +Dec, +z = towards observer
+            vel (3xN arr) [km/s]: velocity in xyz plane.
+            acc (3xN arr) [km/s/yr]: acceleration in xyz plane.
+        Written by Logan Pearce, 2019, inspired by Sarah Blunt
+    """
+    import numpy as np
+    import astropy.units as u
+    from myastrotools.tools import eccentricity_anomaly, danby_solve
+    
+    # Compute mean motion and eccentric anomaly:
+    meanmotion = np.sqrt(kep / sma**3).to(1/u.s)
+    try:
+        E = danby_solve(eccentricity_anomaly, meananom, ecc, 0.001)
+    except:
+        nextE = [danby_solve(eccentricity_anomaly, varM,vare, 0.001) for varM,vare in zip(meananom, ecc)]
+        E = np.array(nextE)
+
+    pos = np.zeros(3)
+    pos[0], pos[1] = (sma*(np.cos(E) - ecc)).value, (sma*np.sqrt(1-ecc**2)*np.sin(E)).value
+        
+    return pos
+
 ############################################################################################################
 #################################### Orbit Fraction ########################################################
 ############################################################################################################
@@ -3042,6 +3125,31 @@ def orbit_fraction_postional_uncertainty(time, period, sep = None, snr = 5):
         return v_scalefree_uncert*sep, a_scalefree_uncert*sep, j_scalefree_uncert*sep
     else:
         return v_scalefree_uncert, a_scalefree_uncert, j_scalefree_uncert
+
+############################################################################################################
+#################################### Plotting Tools ####################################################
+############################################################################################################
+
+def add_interval(ax, xdata, ydata, caps="  ", color = 'None', textcolor = 'None'):
+    ''' Draw a line with errorbar style caps
+    ex: add_interval(ax, [-1,1], (-2.5,-2.5), "  ",color='tab:blue')
+    '''
+    import matplotlib as mpl
+    if color == 'None':
+        line = ax.add_line(mpl.lines.Line2D(xdata, ydata,lw=3))
+    else:
+        line = ax.add_line(mpl.lines.Line2D(xdata, ydata,lw=3, color=color))
+    if textcolor == 'None':
+        textcolor = line.get_color()
+    anno_args = {
+        'ha': 'center',
+        'va': 'center',
+        'size': 8,
+        'color': textcolor
+    }
+    a0 = ax.annotate(caps[0], xy=(xdata[0], ydata[0]),  **anno_args)
+    a1 = ax.annotate(caps[1], xy=(xdata[1], ydata[1]), **anno_args)
+    return (line,(a0,a1))
 
 ############################################################################################################
 #################################### Observing Planning ####################################################
@@ -3343,6 +3451,46 @@ def plot_ADI_skyrotation(object_name, location, time, utc_offset):
     plt.tight_layout()
     return fig
 
+def total_ADI_skyrotation(object_name, location, timestart, timestop):
+    ''' Compute total amount of sky rotation over the course of an observation
+    
+    Args:
+        object_name (str): Simbad resolvable name
+        location (str): astropy observatory location
+        timestart (astropy Time object): astropy Time object for the start of the observation in utc.  
+                Ex: timestart = Time('2024-03-21T01:44:00', scale='utc')
+        timestop (astropy Time object): astropy Time object for the end of the observation in utc.
+        
+    Returns:
+        flt: total amount of field rotation in degrees
+    '''
+    from astropy.coordinates import EarthLocation, AltAz, SkyCoord
+    import matplotlib.pyplot as plt
+    # set up object and location:
+    location = EarthLocation.of_site(location)
+    ob = SkyCoord.from_name(object_name)
+    # compute the number of minutes in the observation time:
+    Nminutes = (timestop-timestart).to(u.min)
+    # make an array of minutes:
+    minutes = np.arange(0,(Nminutes).value,1)
+    phitot = 0
+    for i in range(len(minutes)):
+        # the current time is the start time plus the number of minutes:
+        time = timestart + minutes[0]*u.min
+        # Establish new AltAz frame at given location:
+        altazframe = AltAz(obstime=time, location=location)
+        obaltazs = ob.transform_to(altazframe)
+        ZenithDistance = np.radians(90 - obaltazs.alt.value)
+        az = np.radians(obaltazs.az.value)
+        # this equation compuites degrees per minute, so since the time frame is one minute,
+        # the sky moved this many degrees over that minute:
+        phi = 0.2506*np.cos(az)*np.cos(np.radians(location.lat.value)) / np.sin(ZenithDistance)
+        #phi = np.abs(phi*(u.deg/u.min))
+        # add to the total
+        phitot += np.abs(phi)
+
+    return phitot
+
 ############################################################################################################
 ############################################## Photometry ##################################################
 ############################################################################################################
@@ -3408,16 +3556,18 @@ def pixel_seppa_clio(x1,y1,x2,y2,imhdr=None):
         return sep
 
 
-def Get_MagaoX_FWHM(filt):
+def Get_MagaoX_FWHM(filt,D = 6.5):
     ''' Return lambda/D in pixels and mas for a given MagAO-X filter
     '''
     filters = {'z':0.908,'i':0.764,'r':0.613,'g':0.527}
     lamb_cent = filters[filt]
-    lod = 0.206*lamb_cent/6.5
-    lod = lod*u.arcsec.to(u.mas)
+    # lod in arcsec:
+    lod = 0.206*lamb_cent/D
+    lod_in_mas = lod*u.arcsec.to(u.mas)
     pixscale = 6 #mas/pixel
-    fwhm = lod/pixscale
-    return fwhm, lod
+    # lod in pixels:
+    lod_in_pixels = lod_in_mas/pixscale
+    return lod_in_pixels, lod_in_mas
 
 # Magnitudes
 def app_abs(m,d):
@@ -3631,6 +3781,30 @@ def GetPhotonsPerSec(wavelength, flux, filt, distance, radius, primary_mirror_di
     return total_flux_in_photons_sec * (1/u.s)
 
 
+def GetFWHMofPSFinImageFromGaussianFit(im):
+    from myastrotools.tools import GetStarLocation, ShiftImage
+    cent = GetStarLocation(im)
+    center = [0.5*(im.shape[0]-1), 0.5*(im.shape[1]-1)]
+    dx = center[0] - cent[0]
+    dy = center[1] - cent[1]
+    im_shift = ShiftImage(im, dx = dx, dy = dy)
+    cent2 = GetStarLocation(im_shift)
+    x,y = np.arange(0,im_shift.shape[0],1), im_shift[:,512]
+
+    from astropy.modeling import models, fitting
+    g_init = models.Gaussian1D(amplitude=max(x), mean=512, stddev=Get_MagaoX_FWHM('z')[0]/2.355)
+    model = g_init+models.Const1D(amplitude=np.mean(im_shift[50:250,512]))
+    fit_g = fitting.LevMarLSQFitter()
+    g = fit_g(model, x,y)
+
+    x,y = np.arange(0,im.shape[0],1), im_shift[512,:]
+    g_init = models.Gaussian1D(amplitude=max(x), mean=512, stddev=Get_MagaoX_FWHM('z')[0]/2.355)
+    model = g_init+models.Const1D(amplitude=np.mean(im_shift[50:250,512]))
+    fit_g = fitting.LevMarLSQFitter()
+    g2 = fit_g(model, x,y)
+    return (g.stddev_0*2.355)*5.9,(g2.stddev_0*2.355)*5.9, g, g2
+
+
 ############################################################################################################
 ####################################### Radial Profile ##################################################
 ############################################################################################################
@@ -3723,6 +3897,7 @@ def radial_data(data,annulus_width=1,working_mask=None,x=None,y=None,rmax=None):
     radialdata.numel = ny.zeros(nrad)
     radialdata.max = ny.zeros(nrad)
     radialdata.min = ny.zeros(nrad)
+    radialdata.sum = ny.zeros(nrad)
     radialdata.r = radial
     
     #---------------------
@@ -3739,6 +3914,7 @@ def radial_data(data,annulus_width=1,working_mask=None,x=None,y=None,rmax=None):
         radialdata.numel[irad] = ny.nan
         radialdata.max[irad] = ny.nan
         radialdata.min[irad] = ny.nan
+        radialdata.sum[irad] = ny.nan
       else:
         radialdata.mean[irad] = data[thisindex].mean()
         radialdata.std[irad]  = data[thisindex].std()
@@ -3746,12 +3922,34 @@ def radial_data(data,annulus_width=1,working_mask=None,x=None,y=None,rmax=None):
         radialdata.numel[irad] = data[thisindex].size
         radialdata.max[irad] = data[thisindex].max()
         radialdata.min[irad] = data[thisindex].min()
+        radialdata.sum[irad] = ny.sum(data[thisindex])
     
     #---------------------
     # Return with data
     #---------------------
     
     return radialdata
+
+
+def GetFWHMofPSFinImage(image):
+    ''' For a single image, find the star, center the image, return a radial
+    profile and the FWHM of the psf in the image.
+    '''
+    from myastrotools.tools import GetStarLocation, radial_data, ShiftImage
+    cent = GetStarLocation(image)
+    center = [0.5*(image.shape[0]-1), 0.5*(image.shape[1]-1)]
+    dx = center[0] - cent[0]
+    dy = center[1] - cent[1]
+    median_shift = ShiftImage(image, dx = dx, dy = dy)
+    #cent2 = GetStarLocation(median_shift)
+    rd = radial_data(median_shift)
+    rd.r_mas = rd.r * 5.9
+    halfmax = max(rd.median) * 0.5
+    from scipy.interpolate import interp1d
+    func = interp1d(rd.median,rd.r_mas)
+    hwhm = func(halfmax)
+    
+    return hwhm*2, rd
 
 def CenteredDistanceMatrix(n, ny = None, returnmesh = False):
     ''' Creates 2d array of the distance of each element from the center
@@ -3779,7 +3977,7 @@ def CenteredDistanceMatrix(n, ny = None, returnmesh = False):
         return r, xx, yy
     return r 
 
-def MakeRadialSubtractionMask(shape,r0,r1,phi0,phi1):
+def MakeRadialSubtractionMask(shape,r0,r1,phi0,phi1,inside_value = 1, outside_value = 0):
     ''' Make a mask that cuts out a region of radius r0<r<r1 and angle phi0<phi<phi1
     Args:
         shape (arr): shape of mask in pixels
@@ -3798,14 +3996,17 @@ def MakeRadialSubtractionMask(shape,r0,r1,phi0,phi1):
     angle = np.arctan2(yy,xx)
     angle = (np.degrees(angle) + 270)%360
     mask[np.where((angle > phi0) & (angle < phi1))] = 0
+    mask = np.array(mask, dtype=bool)
     return mask
 
 def SubtractRadProfile(im, boolmask):
     from myastrotools.tools import CenteredDistanceMatrix, radial_data
     from scipy.interpolate import interp1d
     r = CenteredDistanceMatrix(im.shape[0], returnmesh = False)
+    r = r * boolmask
     radial_profile = radial_data(im,annulus_width=1,working_mask=boolmask,x=None,y=None,rmax=None)
-    x = np.arange(np.max(r))
+    maxr = np.max([np.max(r),len(radial_profile.median)])
+    x = np.arange(maxr)
     rflat = np.int_(r.flat)
     f = interp1d(x, radial_profile.median)
     p = f(np.int_(r.flat)).reshape(r.shape)
@@ -3976,17 +4177,14 @@ def LoadElBadryCatalog():
 ############################################################################################################
 ####################################### ADI/RDI/SDI Tools ##################################################
 ############################################################################################################
+filters = {'z':0.908,'i':0.764,'r':0.613,'g':0.527}
 
-
-def GetStarLocation(im, threshold = 5000, lamb_cent = 0.908):
-    from photutils import DAOStarFinder
-    lod = 0.206*lamb_cent/6.5
-    lod = lod*u.arcsec.to(u.mas)
-    pixscale = 6 #mas/pixel
-    fwhm = lod/pixscale
-    #fwhm = 10
-
-    daofind = DAOStarFinder(fwhm=fwhm, threshold=threshold) 
+def GetStarLocation(im, lamb_cent_um, primary_diameter_m, platescale_as_per_pixel, threshold):
+    from photutils.detection import DAOStarFinder
+    xc,yc = 0.5*(im.shape[0]-1),0.5*(im.shape[1]-1)
+    fwhm = 0.206*lamb_cent_um/primary_diameter_m
+    fwhm_pix = fwhm/platescale_as_per_pixel
+    daofind = DAOStarFinder(fwhm=fwhm_pix, threshold=threshold) 
     sources = daofind(im)
     if len(sources) > 1:
         print('more than one source found, maybe change threshold?')
@@ -4104,6 +4302,7 @@ def RotateImage(image, parang, rotationoffset, center = None, interp = 'bicubic'
            rotated image with north up east left
     """
     import cv2
+    image = image.astype('=f4')
     
     if interp == 'bicubic':
         intp = cv2.INTER_CUBIC
@@ -4206,7 +4405,112 @@ def MakeImageStack(image_list, center_wavelength, center_image = True,
     
     return stack, parang_dict, skipped, skipped_index
 
+def ComputeKLIPBasisSet(ref_psfs, K_klip, return_cov = False,
+                 verbose = False):
+    """Build an estimator for the psf of a BDI science target image from a cube of reference psfs 
+       (use the ab_stack_shift function).  Follows steps of Soummer+ 2012 sec 2.2
+       
+    Written by Logan A. Pearce, 2020
+    Heavily influenced by the lovely coding over at PyKLIP (https://pyklip.readthedocs.io/en/latest/)
 
+    What is returned based on keywords:
+    if (return_cov and return_basis) is True:
+        return outputimage, Z, immean, cov, lamb, c
+    elif return_basis:
+        return outputimage, Z, immean
+    elif return_cov:
+        return outputimage, cov
+    else:
+        return outputimage
+    
+    Dependencies: numpy, image_registration, scipy
+
+    Parameters:
+    -----------
+    ref_psfs : 3d array
+        reference psfs array of shape Nxmxn where N = number of reference psfs
+    covariances : arr
+        covariance matrix for ref psfs can be passed as an argument to avoid needing
+        to calculate it
+    basis : 3d arr
+        psf basis modes (Z of Soummer 2.2.2) for star A or B can be passed as an argument to avoid needing
+        to calculate it
+    return_estimator : bool
+        if set to True, return the estimated psf(s) used to subtract from the science target
+        
+    Returns:
+    --------
+    Nxp arr
+        psf model basis modes (if return_basis = True)
+    mxn arr
+        mean image that accompanies basis set Z (if return_basis = True)
+    NxN arr
+        return the computed covariance matrix is return_cov = True. So it can be used in future
+        calcs without having to recalculate
+    """
+    from scipy import ndimage
+    #import image_registration
+    # Shift science image to line up with reference psfs (aligned during the cubing step):
+    #dx,dy,edx,edy = image_registration.chi2_shift(np.sum(ref_psfs,axis=0), scienceimage, upsample_factor='auto')
+    #scienceimage = ndimage.shift(scienceimage, [-dy,-dx], output=None, order=4, mode='constant', \
+    #                          cval=0.0, prefilter=True)
+    # Start KLIP math:
+    from scipy.linalg import eigh
+    
+    # Soummer 2012 2.2.1:
+    ### Prepare science target:
+    shape=ref_psfs[0].shape
+    p = shape[0]*shape[1]
+    
+    # Build basis modes:
+    ### Prepare ref psfs:
+    refshape=ref_psfs.shape
+    N = refshape[0]
+    if N < np.min(K_klip):
+        if verbose:
+            print("Oops! All of your requested basis modes are more than there are ref psfs.")
+            print("Setting K_klip to number of ref psfs.  K_klip = ",N-1)
+        K_klip = N-1
+    if N < np.max(K_klip):
+        if verbose:
+            print("Oops! You've requested more basis modes than there are ref psfs.")
+            print("Setting where K_klip > N-1 to number of ref psfs - 1.")
+        K_klip[np.where(K_klip > N-1)] = N-1
+        if verbose:
+            print("K_klip = ",K_klip)
+    K_klip = np.clip(K_klip, 0, N)
+    R = np.reshape(ref_psfs,(N,p))
+    # Make the mean image:
+    immean = np.nanmean(R, axis=0)
+    # Subtract mean image from each reference image:
+    R_meansub = R - immean[None,:]#<- makes an empty first dimension to make
+    # the vector math work out
+
+    # Soummer 2.2.2:
+    # compute covariance matrix of reference images:
+    cov = np.cov(R_meansub)
+    # compute eigenvalues (lambda) and corresponding eigenvectors (c)
+    # of covariance matrix.  Compute only the eigenvalues/vectors up to the
+    # desired number of bases K_klip.
+    lamb,c = eigh(cov, eigvals = (N-np.max(K_klip),N-1))
+    # np.cov returns eigenvalues/vectors in increasing order, so
+    # we need to reverse the order:
+    index = np.flip(np.argsort(lamb))
+    # sort corresponding eigenvalues:
+    lamb = lamb[index]
+    # check for any negative eigenvalues:
+    check_nans = np.any(lamb <= 0)
+    # sort eigenvectors in order of descending eigenvalues:
+    c = c.T
+    c = c[index]
+    # np.cov normalizes the covariance matrix by N-1.  We have to correct
+    # for that because it's not in the Soummer 2012 equation:
+    lamb = lamb * (p-1)
+    # Take the dot product of the reference image with corresponding eigenvector:
+    Z = np.dot(R.T, c.T)
+    # Multiply by 1/sqrt(eigenvalue)
+    Z = Z * np.sqrt(1/lamb)
+    return immean, Z.T
 
 def KLIPSubtractScienceImage(scienceimage, K_klip, KLIPBasis, immean):
     shape=scienceimage.shape
@@ -4273,6 +4577,7 @@ def InjectPlanet(image, parang, rotationoffset, template, sep, pa, contrast, TC,
                  sepformat = 'lambda/D', 
                  pixscale = 6,
                  wavelength = 'none',
+                 D = 6.5,
                  inject_negative_signal = False
                 ):
     ''' Using a template psf, place a fake planet at the desired sep, pa, and
@@ -4304,6 +4609,8 @@ def InjectPlanet(image, parang, rotationoffset, template, sep, pa, contrast, TC,
         pixelscale in mas/pixel.  Default = 15.9 mas/pix, pixscale for CLIO narrow camera
     wavelength : flt
         central wavelength of filter in microns, needed if sepformat = 'lambda/D'
+    D : flt
+        telescope mirror diameter, needed if sepformat = 'lambda/D'
     box : int
         size of template box.  Template will be box*2 x box*2
     
@@ -4320,10 +4627,14 @@ def InjectPlanet(image, parang, rotationoffset, template, sep, pa, contrast, TC,
     if sepformat == 'mas':
         sep = sep / pixscale
     if sepformat == 'lambda/D':
-        #from myastrotools.tools import lod_to_pixels
+        # convert sep to pixels"
         if wavelength == 'none':
             raise ValueError('wavelength input needed if sepformat = lambda/D')
-        sep = lod_to_pixels(sep, wavelength)
+        # compute size of lod in pixels:
+        lod_in_mas = Get_LOD(wavelength*u.um, D*u.m)
+        lod_in_pixels = lod_in_mas / pixscale
+        # sep in pixels = sep in lod * lod in pixels
+        sep = sep * lod_in_pixels
     # pa input - rotate from angle relative to north to angle relative to image up:
     #    do the opposite of what you do to derotate images
     
@@ -4443,6 +4754,172 @@ def GetTemplateContrast(image1,image2,pos1,pos2,**kwargs):
     mag1 = GetMag(image1,pos1[0],pos1[1], **kwargs)
     mag2 = GetMag(image2,pos2[0],pos2[1], **kwargs)
     return mag2 - mag1
+
+
+def ClassicalADIwithUnsharpMask(stack, files, filt, lod_multiplier=3, wrongway = False):
+    from myastrotools.tools import RotateImage, update_progress
+    # make psf model:
+    psf = np.median(stack,axis=0)
+    # subtract psf model from each image in stack:
+    psfsub = np.zeros(stack.shape)
+    print('psf sub')
+    for i in range(stack.shape[0]):
+        psfsub[i] = stack[i].astype('=f4') - psf
+        update_progress(i,stack.shape[0])
+    # derotate each psf subbed image:
+    derotate = np.zeros(stack.shape)
+    rotationoffset = 1.6
+    # for each image in the stack:
+    if wrongway:
+        rotmult = -1
+    else:
+        rotmult = 1
+    print('derotate')
+    for i in range(stack.shape[0]):
+        # derotate the psf-subtracted image:
+        derotate[i] = RotateImage(psfsub[i], -files['parang'][i]*rotmult, 
+                                  rotationoffset, center = None, interp = 'bicubic', 
+                    bordermode = 'constant', cval = 0, scale = 1)
+        update_progress(i,stack.shape[0])
+    # median combine
+    medianed = np.median(derotate, axis=0)
+    # gaussian filter
+
+    from scipy.ndimage import gaussian_filter
+    from myastrotools.tools import Get_MagaoX_FWHM
+    lods = Get_MagaoX_FWHM(filt)[1] / 5.9
+    sigma = lod_multiplier*lods
+    filtered = gaussian_filter(medianed, sigma=sigma)
+    # unsharp mask:
+    unsharp_masked = medianed - filtered
+    
+    return psf, psfsub, medianed, unsharp_masked
+
+
+###################################################################################
+
+def lambdaoverD_to_arcsec(lamb, D = 6.5):
+    """ Compute lamb/D.  Default is for Magellan mirror and CLIO narrow camera pixelscale.
+        Inputs:
+            lamb [um]: central wavelength of filter in microns.  Astropy unit object preferred
+            D [m]: primary mirror diameter.  Astropy unit object required
+            pixscale [mas/pix]: 
+        Returns:
+            loverd [arcsec]: lambda/D in arcsec per L/D
+    """
+    arcsec = (0.2063*(lamb/D))
+    return arcsec
+
+def lambdaoverD_pix(lamb, pixscale = 15.9, D = 6.5):
+    import astropy.units as u
+    loverd = lambdaoverD_to_arcsec(lamb, D = D)
+    loverd_pix = loverd*u.arcsec.to(u.mas) / pixscale
+    return loverd_pix
+
+def lod_to_pixels(lod, lamb, pixscale = 15.9, D = 6.5):
+    """ Convert separation in lambda/D to pixels
+    """
+    loverd_pix = lambdaoverD_pix(lamb, pixscale=pixscale, D = D)
+    return lod*loverd_pix
+
+def getsnr(image, sep, pa, xc, yc, aperture_cutout_multiple = 2, wavelength = 0.8, D = 6.5, radius = 0.5,
+           pixscale = 5.9, 
+           return_signal_noise = False,
+           return_photometry_only = False):
+    ''' Get SNR of injected planet signal using method and Student's T-test
+        statistics described in Mawet 2014
+
+    Parameters:
+    -----------
+    image : 2d arr
+        reduced image with injected planet signal at (sep,pa)
+    sep : flt
+        separation of injected signal in L/D units
+    pa : flt
+        position angle of inject signal relative to north in degrees
+    xc, yc : flt or int
+        (x,y) pixel location of center of star
+    aperture_cutout_multiple : int
+        number of apertures to cut out from noise calc on either side of injected signal
+    wavelength : flt
+        central wavelength in microns of image filter. Used for converting 
+        from L/D units to pixels.  Default = 3.9
+    D : flt
+        telescope diameter for converting lod
+    radius : flt
+        radius of aperture in LOD units. radius = 0.5 is a 1 LOD aperture
+    pixscale : flt
+        pixel scale in mas/pix
+    return_signal_noise : bool
+        if True, return SNR, signal with background subtracted, noise level, background level
+    
+    Returns:
+    --------
+    flt
+        Signal-to-Noise ratio for given injected signal
+            
+    '''
+    from photutils.aperture import CircularAperture, aperture_photometry
+    lod_in_mas = Get_LOD(wavelength*u.um, D*u.m)
+    lod_in_pixels = lod_in_mas / pixscale
+    # sep in pixels = sep in lod * lod in pixels
+    seppix = sep * lod_in_pixels
+    # radius in pixels:
+    radius = radius * lod_in_pixels
+    # Number of 1L/D apertures that can fit on the circumference at separation:
+    Napers = np.floor(sep*2*np.pi)
+    # Change in angle from center of one aper to the next:
+    dTheta = 360/Napers
+    # Create array around circumference, excluding the ones immediately before and after
+    # where the planet is:
+    if aperture_cutout_multiple * dTheta > 180:
+        pas = [pa + 180]
+    else:
+        pas = np.arange(pa + (aperture_cutout_multiple * dTheta), 
+                    pa + 360-((aperture_cutout_multiple - 1) * dTheta),
+                    dTheta)%360
+    # pas = np.arange(pa + (aperture_cutout_multiple * dTheta), 
+    #                 pa + 360-((aperture_cutout_multiple - 1) * dTheta),
+    #                 dTheta)%360
+    # create emptry container to store results:
+    noisesums = np.zeros(len(pas))
+    # for each noise aperture:
+    for i in range(len(pas)):
+        # lay down a photometric aperture at that point:
+        xx = seppix*np.sin(np.radians((pas[i])))
+        yy = seppix*np.cos(np.radians((pas[i])))
+        xp,yp = xc-xx,yc+yy
+        aperture = CircularAperture([xp,yp], r=radius)
+        # sum pixels in aperture:
+        phot = aperture_photometry(image, aperture)
+        # add to noise container:
+        noisesums[i] = phot['aperture_sum'][0]
+    # the noise value is the std dev of pixel sums in each
+    # noise aperture:
+    noise = np.std(noisesums)
+    # Compute signal of injected planet in signal aperture:
+    xx = seppix*np.sin(np.radians((pa)))
+    yy = seppix*np.cos(np.radians((pa)))
+    xp,yp = xc-xx,yc+yy
+    # Lay down aperture at planet location:
+    aperture = CircularAperture([xp,yp], r=radius)
+    # compute pixel sum in that location:
+    phot = aperture_photometry(image, aperture)
+    signal = phot['aperture_sum'][0]
+    signal_without_bkgd = signal.copy()
+    # compute mean background:
+    bkgd = np.mean(noisesums)
+    # Eqn 9 in Mawet 2014:
+    signal = signal - bkgd
+    if return_photometry_only:
+        return signal, noise, signal_without_bkgd, noise, bkgd
+    if noise == 0.0:
+        return signal, noise, signal_without_bkgd, noise, bkgd
+
+    snr = signal / ( noise * np.sqrt(1+ (1/np.size(pas))) )
+    if return_signal_noise:
+        return snr, signal, signal_without_bkgd, noise, bkgd
+    return snr
 
 
 ############################################################################################################
@@ -4656,8 +5133,8 @@ def freedman_diaconis(array):
 
 def mode(array):
     import numpy as np
-    from myastrotools.stats import freedman_diaconis
-    n, bins = np.histogram(array, freedman_diaconis(array)[1], density=True)
+    from myastrotools.tools import freedman_diaconis
+    n, bins = np.histogram(array, bins='fd', density=True)
     max_bin = np.max(n)
     bin_inner_edge = np.where(n==max_bin)[0]
     bin_outer_edge = np.where(n==max_bin)[0]+1
@@ -4678,7 +5155,7 @@ def ci(array,interval):
     Written by: Logan Pearce, 2018
     """
     import numpy as np
-    from myastrotools.stats import mode
+    from myastrotools.tools import mode
     sorts = np.sort(array)
     nsamples = sorts.shape[0]
     # Median
@@ -4734,7 +5211,18 @@ def min_credible_interval(x, alpha):
 
 
     
-    
+def ResampleSpectrum(original_wavelength, original_flux, new_wavelength):
+    from scipy.interpolate import interp1d
+    import numpy as np
+    ### We need to interpolate the spectrum's flux array onto the filter's wavelength array 
+    # so they can be multiplied:
+    # First cut off areas of spectrum outside the filter curve to avoid interpolation errors:
+    ind = np.where((original_wavelength > np.min(new_wavelength)) &
+                   (original_wavelength < np.max(new_wavelength)))[0]
+    # Make interpolation function:
+    interpfunc = interp1d(original_wavelength[ind],original_flux[ind], fill_value="extrapolate")
+    # interpolate the spectrum's flux on the filter's wavelength array:
+    return interpfunc(new_wavelength)  
     
     
     
@@ -5078,7 +5566,8 @@ class BesselBFilter(object):
         f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
         self.wavelength = np.array(f['wavelength'])
         self.transmission = np.array(f['transmission']) / 100
-        self.wavelength_unit = 'nm'
+        self.transmission = self.transmission/max(self.transmission)
+        self.wavelength_unit = u.nm
         self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
         from myastrotools.tools import GetFWHM, GetEffectiveWidth
         fwhm = GetFWHM(self.wavelength,self.transmission)
@@ -5095,7 +5584,8 @@ class BesselIFilter(object):
         f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
         self.wavelength = np.array(f['wavelength'])
         self.transmission = np.array(f['transmission']) / 100
-        self.wavelength_unit = 'nm'
+        self.transmission = self.transmission/max(self.transmission)
+        self.wavelength_unit = u.nm
         self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
         from myastrotools.tools import GetFWHM, GetEffectiveWidth
         fwhm = GetFWHM(self.wavelength,self.transmission)
@@ -5112,7 +5602,8 @@ class BesselRFilter(object):
         f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
         self.wavelength = np.array(f['wavelength'])
         self.transmission = np.array(f['transmission']) / 100
-        self.wavelength_unit = 'nm'
+        self.transmission = self.transmission/max(self.transmission)
+        self.wavelength_unit = u.nm
         self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
         from myastrotools.tools import GetFWHM, GetEffectiveWidth
         fwhm = GetFWHM(self.wavelength,self.transmission)
@@ -5129,7 +5620,8 @@ class BesselUFilter(object):
         f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
         self.wavelength = np.array(f['wavelength'])
         self.transmission = np.array(f['transmission']) / 100
-        self.wavelength_unit = 'nm'
+        self.transmission = self.transmission/max(self.transmission)
+        self.wavelength_unit = u.nm
         self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
         from myastrotools.tools import GetFWHM, GetEffectiveWidth
         fwhm = GetFWHM(self.wavelength,self.transmission)
@@ -5146,7 +5638,117 @@ class BesselVFilter(object):
         f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
         self.wavelength = np.array(f['wavelength'])
         self.transmission = np.array(f['transmission']) / 100
-        self.wavelength_unit = 'nm'
+        self.transmission = self.transmission/max(self.transmission)
+        self.wavelength_unit = u.nm
+        self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
+        from myastrotools.tools import GetFWHM, GetEffectiveWidth
+        fwhm = GetFWHM(self.wavelength,self.transmission)
+        self.half_max = fwhm[3]
+        self.fwhm = fwhm[0]
+        self.half_max_low = fwhm[1]
+        self.half_max_high = fwhm[2]
+        self.eff_width = GetEffectiveWidth(self.wavelength, self.transmission)
+
+class JohnsonBFilter(object):
+    def __init__(self):
+        import os
+        file = os.path.join(os.path.dirname(__file__), 'filter_curves/Generic_Johnson.B.dat')
+        f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
+        self.wavelength = np.array(f['wavelength'])
+        self.transmission = np.array(f['transmission']) / 100
+        self.transmission = self.transmission/max(self.transmission)
+        self.wavelength_unit = u.AA
+        self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
+        from myastrotools.tools import GetFWHM, GetEffectiveWidth
+        fwhm = GetFWHM(self.wavelength,self.transmission)
+        self.half_max = fwhm[3]
+        self.fwhm = fwhm[0]
+        self.half_max_low = fwhm[1]
+        self.half_max_high = fwhm[2]
+        self.eff_width = GetEffectiveWidth(self.wavelength, self.transmission)
+
+class JohnsonVFilter(object):
+    def __init__(self):
+        import os
+        file = os.path.join(os.path.dirname(__file__), 'filter_curves/Generic_Johnson.V.dat')
+        f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
+        self.wavelength = np.array(f['wavelength'])
+        self.transmission = np.array(f['transmission']) / 100
+        self.transmission = self.transmission/max(self.transmission)
+        self.wavelength_unit = u.AA
+        self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
+        from myastrotools.tools import GetFWHM, GetEffectiveWidth
+        fwhm = GetFWHM(self.wavelength,self.transmission)
+        self.half_max = fwhm[3]
+        self.fwhm = fwhm[0]
+        self.half_max_low = fwhm[1]
+        self.half_max_high = fwhm[2]
+        self.eff_width = GetEffectiveWidth(self.wavelength, self.transmission)
+
+class JohnsonRFilter(object):
+    def __init__(self):
+        import os
+        file = os.path.join(os.path.dirname(__file__), 'filter_curves/Generic_Johnson.R.dat')
+        f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
+        self.wavelength = np.array(f['wavelength'])
+        self.transmission = np.array(f['transmission']) / 100
+        self.transmission = self.transmission/max(self.transmission)
+        self.wavelength_unit = u.AA
+        self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
+        from myastrotools.tools import GetFWHM, GetEffectiveWidth
+        fwhm = GetFWHM(self.wavelength,self.transmission)
+        self.half_max = fwhm[3]
+        self.fwhm = fwhm[0]
+        self.half_max_low = fwhm[1]
+        self.half_max_high = fwhm[2]
+        self.eff_width = GetEffectiveWidth(self.wavelength, self.transmission)
+
+class JohnsonIFilter(object):
+    def __init__(self):
+        import os
+        file = os.path.join(os.path.dirname(__file__), 'filter_curves/Generic_Johnson.I.dat')
+        f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
+        self.wavelength = np.array(f['wavelength'])
+        self.transmission = np.array(f['transmission']) / 100
+        self.transmission = self.transmission/max(self.transmission)
+        self.wavelength_unit = u.AA
+        self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
+        from myastrotools.tools import GetFWHM, GetEffectiveWidth
+        fwhm = GetFWHM(self.wavelength,self.transmission)
+        self.half_max = fwhm[3]
+        self.fwhm = fwhm[0]
+        self.half_max_low = fwhm[1]
+        self.half_max_high = fwhm[2]
+        self.eff_width = GetEffectiveWidth(self.wavelength, self.transmission)
+
+
+class CousinsRFilter(object):
+    def __init__(self):
+        import os
+        file = os.path.join(os.path.dirname(__file__), 'filter_curves/Generic_Cousins.R.dat')
+        f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
+        self.wavelength = np.array(f['wavelength'])
+        self.transmission = np.array(f['transmission']) / 100
+        self.transmission = self.transmission/max(self.transmission)
+        self.wavelength_unit = u.AA
+        self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
+        from myastrotools.tools import GetFWHM, GetEffectiveWidth
+        fwhm = GetFWHM(self.wavelength,self.transmission)
+        self.half_max = fwhm[3]
+        self.fwhm = fwhm[0]
+        self.half_max_low = fwhm[1]
+        self.half_max_high = fwhm[2]
+        self.eff_width = GetEffectiveWidth(self.wavelength, self.transmission)
+
+class CousinsIFilter(object):
+    def __init__(self):
+        import os
+        file = os.path.join(os.path.dirname(__file__), 'filter_curves/Generic_Cousins.I.dat')
+        f = pd.read_table(file, comment='#', delim_whitespace=True, names=['wavelength','transmission'])
+        self.wavelength = np.array(f['wavelength'])
+        self.transmission = np.array(f['transmission']) / 100
+        self.transmission = self.transmission/max(self.transmission)
+        self.wavelength_unit = u.AA
         self.central_wavelength = np.round(np.sum(self.wavelength*self.transmission) / np.sum(self.transmission), decimals = 3)
         from myastrotools.tools import GetFWHM, GetEffectiveWidth
         fwhm = GetFWHM(self.wavelength,self.transmission)
@@ -5174,13 +5776,130 @@ def Wright2004MainSequencePolynomialFit(BminusV = np.linspace(0,1.75,1000)):
 
     return BminusV, M
 
+def VegaToAB(filt):
+    ''' The SDSS system uses AB mags not Vega mags.  To convert flux to Vega mags, add this  
+    value to the Vega mag to convert to AB. These factors = AB - Vega
+    From https://www.astronomy.ohio-state.edu/martini.10/usefuldata.html
+    '''
+    Dict = {
+        'U':0.79,
+        'B':-0.09,
+        'V':0.02,
+        'R':0.21,
+        'I':0.45,
+        'J':0.91,
+        'H':1.39,
+        'Ks':1.85,
+        'u':0.91,
+        'g':-0.08,
+        'r':0.16,
+        'i':0.37,
+        'z':0.54,
+        'Y':0.634
+    }
+    return Dict[filt]
 
+
+def GetVegaMagInFilter(spectrum_wavelength, spectrum_flux, filter_lambda0, spectrum_wavelength_unit):
+    ''' For a given stellar spectrum in a specific filter, return the Vega magnitude of the star in 
+    that filter.
+    
+    Args:
+        spectrum_wavelength [arr]: spectrum wavelength
+        spectrum_flux [arr]: spectrum flux
+        filter_lamda0 [astropy unit object]: central wavelength of filter. Must include astropy unit
+                Ex: 1.2*u.um
+        spectrum_wavelength_unit [astropy unit]: astropy unit for wavelengths. Ex: u.um
+
+    Returns:
+        flt: ratio of spectrum to Vega flux in that filter in magnitudes.
+    
+    '''
+    import astropy.units as u
+    from myastrotools.tools import FluxLambda0
+    # convert everything to same wavelength units:
+    spectrum_wavelength = spectrum_wavelength*spectrum_wavelength_unit.to(u.um)
+    filter_lambda0 = filter_lambda0.to(u.um)
+    # get flux at central wavelength in filter:
+    flux_at_lambda0 = FluxLambda0(spectrum_wavelength, spectrum_flux, filter_lambda0)
+    # get vega spectrum
+    file = os.path.join(os.path.dirname(__file__), 'vega.csv')
+    vega = pd.read_csv(file)
+    # get vega flux at central wavelength:
+    Vega_at_lambda0 = FluxLambda0(vega['WAVELENGTH']*u.AA.to(u.um),vega['FLUX'], filter_lambda0)
+    # return ratio of spectrum to vega in magnitudes:
+    return -2.5*np.log10(flux_at_lambda0/Vega_at_lambda0)
+
+def AverageFluxInFilter(spectrum_wavelength, spectrum_flux, filter_wavelength, filter_transmission):
+    from scipy.interpolate import interp1d
+    import numpy as np
+    ### We need to interpolate the spectrum's flux array onto the filter's wavelength array 
+    # so they can be multiplied:
+    # First cut off areas of spectrum outside the filter curve to avoid interpolation errors:
+    ind = np.where((spectrum_wavelength > np.min(filter_wavelength)) &
+                   (spectrum_wavelength < np.max(filter_wavelength)))[0]
+    # Make interpolation function:
+    interpfunc = interp1d(spectrum_wavelength[ind],spectrum_flux[ind], fill_value="extrapolate")
+    # interpolate the spectrum's flux on the filter's wavelength array:
+    flux_on_filter_wavelength_grid = interpfunc(filter_wavelength)
+    # Multiply flux by filter transmission:
+    filter_times_flux = flux_on_filter_wavelength_grid * filter_transmission
+
+    # compute dlambda
+    dl = np.mean([filter_wavelength[i] - filter_wavelength[i-1] for i in range(1,len(filter_wavelength))])
+
+    # Compute weighted average:
+    filter_weighted_average = np.sum(filter_times_flux * filter_wavelength * dl) / \
+            np.sum(filter_transmission * filter_wavelength * dl)
+    return filter_weighted_average
+
+
+def GetColorWFluxLambda0(spectrum_wavelength, spectrum_flux,
+             filter_lambda0_1, filter_lambda0_2, 
+             filter_wavelength_unit = 'None', spectrum_wavelength_unit = 'None'):
+    ''' Get color in Vega magnitudes for a spectrum in two different filters.
+
+    Args:
+        spectrum_wavelength [arr]: spectrum wavelength
+        spectrum_flux [arr]: spectrum flux
+        filter_lamda0_1 [flt]: central wavelength of first filter. 
+        filter_lamda0_2 [flt]: central wavelength of second filter.
+        filter_wavelength_unit [astropy unit]: unit for filter wavelength. Ex: u.um
+        spectrum_wavelength_unit [astropy unit]: astropy unit for spectrum wavelength. Ex: u.AA
+    
+    Returns:
+        flt: Vega mag 1 - Vega mag 2
+    '''
+    from myastrotools.tools import GetVegaMagInFilter
+    mag1 = GetVegaMagInFilter(spectrum_wavelength, spectrum_flux, filter_lambda0_1*filter_wavelength_unit, 
+                              spectrum_wavelength_unit)
+    mag2 = GetVegaMagInFilter(spectrum_wavelength, spectrum_flux, filter_lambda0_2*filter_wavelength_unit, 
+                              spectrum_wavelength_unit)
+    return mag1 - mag2
+
+def GetColorWAvgFilterMethod(spectrum_wavelength, spectrum_flux, filt1_wavelength, filt1_transmission, 
+                             filt2_wavelength,filt2_transmission): 
+    modelfilt1 = AverageFluxInFilter(spectrum_wavelength, spectrum_flux, filt1_wavelength, filt1_transmission) 
+    modelfilt2 = AverageFluxInFilter(spectrum_wavelength, spectrum_flux, filt2_wavelength, filt2_transmission) 
+    file = os.path.join(os.path.dirname(__file__), 'vega.csv') 
+    vega = pd.read_csv(file) 
+    vegafilt1 = AverageFluxInFilter(vega['WAVELENGTH [um]'],vega['FLUX'], filt1_wavelength, filt1_transmission) 
+    vegafilt2 = AverageFluxInFilter(vega['WAVELENGTH [um]'],vega['FLUX'], filt2_wavelength, filt2_transmission) 
+    return -2.5*np.log10(modelfilt1/vegafilt1) - (-2.5*np.log10(modelfilt2/vegafilt2))
 
 ############################################################################################################
 ######################################## Reflected Light Funcs #############################################
 ############################################################################################################
 
-# Assume 0.5 geometric albedo:
+def FluxLambda0(spectrum_wavelength,spectrum_flux, lambda_0):
+    from scipy.interpolate import interp1d
+    # create the interpolation function:
+    interpfunc = interp1d(spectrum_wavelength,spectrum_flux, fill_value="extrapolate")
+    # Interpolate the filter's central wavelength in the spectrum's flux array:
+    F_lambda_0 = interpfunc(lambda_0)
+    return F_lambda_0
+
+# Assume 0.5 geoetric albedo:
 def ComputeFluxRatio(Rp, sep, alpha, Ag = 0.5):
     ''' For a single planet compute planet/star flux ratio using Cahoy 2010 eqn 1
     '''
@@ -5451,6 +6170,41 @@ def alphas(inc, phis):
     for phi in phis:
         alphs.append(np.degrees(np.arccos(-np.sin(np.radians(inc)) * np.cos(np.radians(phi)))))
     return alphs
+
+def ComputeT0FromTc(argp, ecc, P, Tc):
+    ''' Compute the time of periastron passage given a time  of inferior onjunction (transit) 
+
+    args:
+        argp [flt]: argument of periastron in degrees
+        ecc [flt]: eccentricity
+        P [flt]: period in the same unit as Tc
+        Tc [Time object or flt]: time of conjunction in either decimal years or astropy Time object
+    
+    returns:
+        Time object or float: time of periastron passage
+    '''
+
+    finf = np.pi/2 - np.radians(argp)
+    Einf = 2 * np.arctan(finf/2) * np.sqrt((1-ecc)/(1+ecc))
+    Minf = Einf - Einf*np.sin(ecc)
+    return Tc - P * Minf / (2*np.pi)
+
+def ComputeTcFromT0(argp, ecc, P, Tc):
+    ''' Compute the time of inferior conjunction (transit) given a time of periastron passage
+
+    args:
+        argp [flt]: argument of periastron in degrees
+        ecc [flt]: eccentricity
+        P [flt]: period in the same unit as Tc
+        T0 [Time object or flt]: time of conjunction in either decimal years or astropy Time object
+    
+    returns:
+        Time object or float: time of inferior conjunction
+    '''
+    finf = np.pi/2 - np.radians(argp)
+    Einf = 2 * np.arctan(finf/2) * np.sqrt((1-ecc)/(1+ecc))
+    Minf = Einf - Einf*np.sin(ecc)
+    return T0 + P * Minf / (2*np.pi)
 
 
 
@@ -6041,7 +6795,367 @@ def MakeModelCloudyAndCloudFreeSpectra(savefiledirectory,
 
 
 
-
-
-
+#### SNR as a function of time from ReflectX models:
+def GetPhotonsPerSec(wavelength, flux, filt, distance, radius, primary_mirror_diameter,
+                    return_ergs_flux_times_filter = False, Omega = None):
+    ''' Given a spectrum with wavelengths in um and flux in ergs cm^-1 s^-1 cm^-2, convolve 
+    with a filter transmission curve and return photon flux in photons/sec. 
+    Following eqns in Chp 7 of my thesis
     
+    Args:
+        wavelength [arr]: wavelength array in um
+        flux [arr]: flux array in ergs cm^-1 s^-1 cm^-2 from the surface of the object (NOT corrected for distance)
+        filt [myastrotools filter object]: filter
+        distance [astropy unit object]: distance to star with astropy unit
+        radius [astropy unit object]: radius of star or planet with astropy unit
+        primary_mirror_diameter [astropy unit object]: primary mirror diameter with astropy unit
+        return_ergs_flux [bool]: if True, return photons/sec and the flux in ergs cm^-1 s^-1 cm^-2
+                                convolved with the filter
+    Returns
+        astropy units object: flux in photons/sec
+        
+    '''
+    import astropy.constants as const
+    # energy in ergs:
+    energy_in_ergs_per_photon_per_wavelength = const.h.cgs * const.c.cgs / wavelength # Eqn 7.14
+    # Flux in photons/cm s cm^2: number of photons per area per sec per lambda:
+    nphotons_per_wavelength = flux / energy_in_ergs_per_photon_per_wavelength # Eqn 7.15
+    
+    # Combine flux with filter curve:
+    w = filt.wavelength*filt.wavelength_unit.to(u.um)
+    t = filt.transmission
+    # make interpolation function:
+    ind = np.where((wavelength > min(w)) & (wavelength < max(w)))[0]
+    # of spectrum wavelength and Flux in photons/cm s cm^2:
+    from scipy.interpolate import interp1d
+    f = interp1d(wavelength[ind], nphotons_per_wavelength[ind], fill_value="extrapolate")
+    # interpolate the filter flux onto the spectrum wavelength grid:
+    flux_on_filter_wavelength_grid = f(w)
+
+    # multiply flux time filter transmission
+    filter_times_flux = flux_on_filter_wavelength_grid * t # F_l x R(l) in eqn 7.16
+    
+    # Now sum:
+    dl = (np.mean([w[j+1] - w[j] for j in range(len(w)-1)]) * u.um).to(u.cm)
+
+    total_flux_in_filter = np.sum(filter_times_flux * dl.value) # Eqn 7.16
+    
+    
+    area_of_primary = np.pi * ((0.5*primary_mirror_diameter).to(u.cm))**2
+
+    #Total flux in photons/sec:
+    total_flux_in_photons_sec = total_flux_in_filter * area_of_primary.value # Eqn 7.17
+    
+    if return_ergs_flux_times_filter:
+        f = interp1d(wavelength[ind], flux[ind], fill_value="extrapolate")
+        # interpolate the filter flux onto the spectrum wavelength grid:
+        flux_ergs_on_filter_wavelength_grid = f(w)
+        filter_times_flux_ergs = flux_ergs_on_filter_wavelength_grid * t
+        
+        return total_flux_in_photons_sec * (1/u.s), filter_times_flux_ergs, w
+    return total_flux_in_photons_sec * (1/u.s)
+
+def GetGuideStarMagForIasTableLookup(actual_star_magnitude):
+    # Tables are available for these guide star mags:
+    available_mags = np.array(['0', '2.5', '5', '7', '9', '10', '11',
+                        '11.5', '12', '12.5', '13','13.5', '14', '14.5', '15'])
+    available_mags = np.array([float(m) for m in available_mags])
+    # find the one closest to actual guidestar mag:
+    idx = (np.abs(available_mags - actual_star_magnitude)).argmin()
+    table_guidestarmag = str(available_mags[idx]).replace('.0','')
+    return table_guidestarmag
+
+def Get_LOD_in_mas(central_wavelength, D):
+    ''' Return lambda/D in mas mas for a filter and primary diameter
+    Args:
+        central_wavelength (flt, astropy units object): wavelength of filter
+        D (flt, astropy units object): primary diameter
+    Returns:
+        flt: lambda over D in mas
+    '''
+    central_wavelength = central_wavelength.to(u.um)
+    D = D.to(u.m)
+    lod = 0.206*central_wavelength.value/D.value
+    lod = lod*u.arcsec.to(u.mas)
+    return lod
+
+def GetIasFromTable(guidestarmag, wfc, sep, pa, 
+                   path_to_maps = '/Users/loganpearce/Dropbox/astro_packages/myastrotools/myastrotools/GMagAO-X-noise/'):
+    ''' For a given guide star magnitude and wfc, look up the value of the atmospheric speckle
+        contribution I_as (Males et al. 2021 eqn 6) at a given separation and position angle
+        
+    Args:
+        guidestarmag (flt or str): Guide star magnitude. Must be: ['0', '2.5', '5', '7', '9', '10', '11',
+                        '11.5', '12', '12.5', '13','13.5', '14', '14.5', '15']
+        wfc (str): wavefront control set up.  Either linear predictive control "lp" or simple integrator "si"
+        sep (flt): separation in lambda/D
+        pa (flt): position angle in degrees
+    
+    Returns:
+        flt: value of I_as at that location
+    '''
+    IasMap = fits.getdata(path_to_maps+f'varmap_{guidestarmag}_{wfc}.fits')
+    center = [0.5*(IasMap.shape[0]-1),0.5*(IasMap.shape[1]-1)]
+    dx = sep * np.cos(np.radians(pa + 90))
+    dy = sep * np.sin(np.radians(pa + 90))
+    if int(np.round(center[0]+dx, decimals=0)) < 0:
+        return np.nan
+    try:
+        return IasMap[int(np.round(center[0]+dx, decimals=0)),int(np.round(center[1]+dy,decimals=0))]
+    except IndexError:
+        return np.nan
+
+def GetIas(guidestarmag, wfc, sep, pa, wavelength, 
+           path_to_maps = '/Users/loganpearce/Dropbox/astro_packages/myastrotools/myastrotools/GMagAO-X-noise/'):
+    '''For a given guide star magnitude, wfc, and planet-star contrast, get the SNR
+        in the speckle-limited regime (Eqn 10 of Males et al. 2021)
+        at a given separation and position angle.
+        
+    Args:
+        guidestarmag (flt or str): Guide star magnitude. Must be: ['0', '2.5', '5', '7', '9', '10', '11',
+                        '11.5', '12', '12.5', '13','13.5', '14', '14.5', '15']
+        wfc (str): wavefront control set up.  Either linear predictive control "lp" or simple integrator "si"
+        sep (flt): separation in lambda/D
+        pa (flt): position angle in degrees
+        Cp (flt): planet-star contrast
+        deltat (flt): observation time in sec
+        wavelength (astropy units object):  central wavelength of filter band
+        tau_as (flt): lifetime of atmospheric speckles in sec. Default = 0.02, ave tau_as for 24.5 m telescope
+                from Males et al. 2021 Fig 10
+    
+    Returns:
+        flt: value of I_as at that location
+    '''
+    from astropy.io import fits
+    ## Load map:
+    # IasMap = fits.getdata(path_to_maps+f'contrast_{guidestarmag}_{wfc}.fits')
+    IasMap = fits.getdata(path_to_maps+f'varmap_{guidestarmag}_{wfc}.fits')
+    
+    # Look up Ias from table
+    Ias = GetIasFromTable(guidestarmag, wfc, sep, pa, path_to_maps = path_to_maps)
+    # Correct for differnce in wavelength between lookup table and filter wavelength:
+    wavelength = wavelength.to(u.um)
+    Ias = Ias * (((0.8*u.um/wavelength))**2).value
+    if np.isnan(Ias):
+        raise Exception('Sep/PA is outside noise map boundaries')
+    else:
+        return Ias
+    
+def ComputeSignalSNR(Ip, Is, Ic, Ias, Iqs, tau_as, tau_qs, deltat, strehl, QE, flux_in_core,
+                           RN = None, Isky = None, Idc = None, texp = None):
+    ''' Get S/N for a planet signal when speckle noise dominated. Using eqns in Chap 7 of
+    my thesis.
+
+    Args:
+        Ip [flt]: planet signal in photons/sec
+        Istar [flt]: star signal in photons/sec
+        Ic [flt]: fractional contribution of intensity from residual dirraction from coronagraph
+        Ias [flt]: contribution from atm speckles
+        Iqs [flt]: fraction from quasistatic speckles
+        tau_as [flt]: average lifetime of atm speckles
+        tau_qs [flt]: average liftetim of qs speckles
+        deltat [flt]: observation time in seconds
+        RN [flt]: read noise
+        Isky [flt]: sky intensity in photons/sec
+        Idc [flt]: dark current in photons/sec
+        texp [flt]: time for single exposure in sec (required only for RN term)
+
+    Returns:
+        flt: signal to noise ratio
+    '''
+    # When using the contrast Ias maps, Strelh applies to the numerator but not denom
+    # (Males, priv. comm.)
+    signal = Ip * deltat * strehl * QE * flux_in_core # Eqn 7.20
+    
+    Istar = Is * QE * flux_in_core
+    photon_noise = Ic + Ias + Iqs
+    atm_speckles = Istar * ( tau_as * (Ias**2 + 2*(Ic*Ias + Ias*Iqs)) )
+    qs_speckles = Istar * ( tau_qs * (Iqs**2 + 2*Ic*Iqs) )
+    
+    Ipstar = Ip *  strehl * QE * flux_in_core
+    
+    sigma_sq_h = Istar * deltat * (photon_noise + atm_speckles + qs_speckles) + signal # Eqn 7.19
+    
+    if RN is not None:
+        skyanddetector = Isky*deltat + Idc*deltat + (RN * deltat/texp)**2
+        noise = np.sqrt(sigma_sq_h + skyanddetector)
+    else:
+        noise = np.sqrt(sigma_sq_h)
+        
+    return signal / noise
+
+
+
+def GetSNR(wavelength, planet_contrast, 
+           star_flux,
+           primary_mirror_diameter, 
+           planet_radius, star_radius, 
+           distance, sep, wfc,
+           filters, observationtime,
+           Ic = 1e-20,
+           Iqs = 1e-20,
+           tau_as = 0.02, # sec, from Fig 10 in Males+ 2021
+           tau_qs = 0.05,
+           RN = None, Isky = None, Idc = None, texp = None, pa = None,
+           MagAOX = False,
+           path_to_maps = '/Users/loganpearce/Dropbox/astro_packages/myastrotools/myastrotools/GMagAO-X-noise/'
+          ):
+    
+    '''Compute S/N as a function of time for a **ReflectX model** in specific filters.
+    
+    Args:
+        wavelength (arr): array of wavelengths for planet and star spectrum
+        planet_contrast (arr): array of planet flux values on wavelength grid
+        star_flux (arr): array of star flux on wavelength grid
+        primary_mirror_diameter (astropy unit object): mirrior diameter. Ex: 25.4*u.m
+        planet_radius (astropy unit object): planet radius
+        star_radius (astropy unit object): star radius
+        distance (astropy unit object): distance to star
+        sep (astropy unit object): planet-star separation
+        wfc (str): wavefront control. Either 'lp' or 'si'
+        filters (filter object): list of filter objects to compute snr for
+        observationtime (arr): array of exposure times
+    
+    '''
+    
+    ## 1. Compute star's observed flux from model intensity and compute star's magnitude:
+    star_flux = star_flux * ComputeOmega(distance, star_radius)
+    star_mag = []
+    for i in range(len(filters)):
+        filt = filters[i]
+        star_mag.append(GetStarMagnitude(star_wavelength, star_flux, filt))
+        
+    ## 2. Get planet flux from model contrast and distance-corrected star flux:
+    planet_flux = star_flux * planet_contrast
+    
+    ## 3. Compute planet and star signal in photons/sec/lambda/D in each filter:
+    planet_signal = []
+    for filt in filters:
+        planet_signal.append(GetPhotonsPerSec(wavelength, planet_flux, filt, distance, 
+                                              planet_radius, primary_mirror_diameter).value)
+    planet_signal = np.array(planet_signal)
+    
+    star_signal = []
+    for filt in filters:
+        star_signal.append(GetPhotonsPerSec(wavelength, star_flux, filt, distance, 
+                                            star_radius, primary_mirror_diameter).value)
+    star_signal = np.array(star_signal)
+    
+    ## 4. Get atmospheric speckle intensity I_as at planet location using maps from Males et al. 2021:
+    # Find relevant table:
+    star_gsm_for_Ias_tables = []
+    for i,filt in enumerate(filters):
+        star_gsm_for_Ias_tables.append(GetGuideStarMagForIasTableLookup(star_mag[i]))
+    # Get location of planet signal:
+    sep_au = sep.to(u.au)
+    sep_mas = (sep_au.value/distance.value)*u.arcsec.to(u.mas)
+    lods_in_mas = [Get_LOD_in_mas(f.central_wavelength*f.wavelength_unit, primary_mirror_diameter) 
+                   for f in filters]
+    sep_lods = [sep_mas/lod for lod in lods_in_mas]
+    if pa is not None:
+        pass
+    else:
+        pa = 90 # deg
+    # Lookup Ias:
+    Ias = []
+    for i in range(len(filters)):
+        wavelength = filters[i].central_wavelength*filters[i].wavelength_unit
+        Ias.append(GetIas(star_gsm_for_Ias_tables[i], wfc, sep_lods[i], pa, wavelength))
+    Ias = np.array(Ias)
+    
+    ## 5. Compute throughput:
+    # 5a. Get QE (encompasses telescope and instrument throughput):
+    if not MagAOX:
+        QE = [0.1]*len(filters)
+    else:
+        QE = [0.13, 0.12, 0.06, 0.04, 0.1, 0.1]
+    # 5b. Get Strehl ratio:
+    strehl_table = pd.read_table(path_to_maps+f'strehl_{wfc}.txt', 
+                                 delim_whitespace=True, names=['mag','strehl'])
+    from scipy.interpolate import interp1d
+    strehl_table2 = strehl_table.drop([4])
+    strehl_table2 = strehl_table2.reset_index(drop=True)
+    available_mags = np.array([float(m) for m in strehl_table2['mag']])
+    func = interp1d(available_mags, strehl_table2['strehl'])
+    strehls = []
+    for i in range(len(filters)):
+        strehl = func(star_mag[i])
+        # scale for wavelength from strehl at 800 nm to filter central wavelength:
+        wavelength = filters[i].central_wavelength*filters[i].wavelength_unit
+        wavelength = wavelength.to(u.um)
+        strehl = strehl * (((0.8*u.um/wavelength))**2).value
+        strehls.append(strehl)
+    # 5c. Amount of star flux in Airy core:
+    star_flux_in_Airy_core_multiple = np.pi/4
+    
+    ## 6. Compute signal to noise ratios
+    if type(observationtime) == np.ndarray:
+        # For an array of times:
+        all_snrs = []
+        for i in range(len(filters)):
+            snrs = []
+            for t in observationtime:
+                snrs.append(ComputeSignalSNR(planet_signal[i], star_signal[i], 
+                                             Ic, Ias[i], Iqs, tau_as, tau_qs, t,
+                                             strehls[i], QE[i], star_flux_in_Airy_core_multiple,
+                                   RN = None, Isky = None, Idc = None, texp = None))
+            all_snrs.append(snrs)
+        return all_snrs, planet_signal, star_signal
+    else:
+        # for a single time:
+        snrs = []
+        for i in range(len(filters)):
+            snrs.append(ComputeSignalSNR(planet_signal[i], star_signal[i], Ic, Ias[i], Iqs, tau_as, tau_qs, 
+                                observationtime, strehl[i], QE[i], star_flux_in_Airy_core_multiple,
+                                RN = RN, Isky = Isky, Idc = Idc, texp = texp))
+        return snrs
+
+
+def MakeDMSparkleMask(im, center, window_width=10, outer_mask_r = 310, inner_mask_r = 165,
+                     pas = [62, 62+90, 62+180, 62+270]):
+    from myastrotools.tools import circle_mask, circle_mask_outer
+    
+    mask = np.zeros(im.shape)
+
+    xx,yy = np.meshgrid(np.arange(im.shape[0])-center[0],np.arange(im.shape[1])-center[1])
+
+    angle = np.arctan2(yy,xx)
+    angle = (np.degrees(angle) + 270)%360
+
+    for i in range(len(pas)):
+        phi0 = pas[i] - window_width
+        phi1 = pas[i] + window_width
+        mask[np.where((angle > phi0) & (angle < phi1))] = 1
+
+    outermask = circle_mask_outer(outer_mask_r, im.shape[0], im.shape[1],
+                               center[0],center[1])
+    mask[outermask] = 0
+
+    innermask = circle_mask(inner_mask_r, im.shape[0], im.shape[1],
+                           center[0],center[1])
+    mask[innermask] = 0
+
+    return mask
+    
+def RegisterOnDMSpeckles(im, centerguess, window_width=10, outer_mask_r = 310, inner_mask_r = 165):
+    pas = [62, 62+90, 62+180, 62+270]
+    r = 215
+    mask = MakeDMSparkleMask(im, center, window_width=window_width, outer_mask_r = outer_mask_r, inner_mask_r = inner_mask_r)
+    from photutils.centroids import centroid_com, centroid_sources
+    xs,ys = [],[]
+    for pa in pas:
+        xt = r * np.cos(np.radians(pa + 90))
+        yt = r * np.sin(np.radians(pa + 90))
+        x, y = centroid_sources(im*mask, center[0]+xt, center[1]+yt,
+                            centroid_func=centroid_com)
+        xs.append(x[0]),ys.append(y[0])
+    starcenter = [np.mean(xs),np.mean(ys)]
+    
+    xc,yc = 0.5*(im.shape[0]-1), 0.5*(im.shape[1]-1)
+    dx = xc - starcenter[0]
+    dy = yc - starcenter[1]
+    print(dx,dy)
+    from myastrotools.tools import ShiftImage
+    imshift = ShiftImage(im, dx = dx, dy = dy, center=[xc,yc],
+              interp = 'bicubic', bordermode = 'constant', cval = 0, scale = 1)
+    return imshift, xs, ys, mask, dx, dy

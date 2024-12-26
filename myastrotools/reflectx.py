@@ -1280,4 +1280,582 @@ def GenerateTerrestrialPlanetReadMe(savefiledirectory,planettype,T_star,r_star,T
     k.write(readme)
     k.close()
 
+def PlotMixingRatios(full_output,limit=50):
+    import matplotlib
+    molecules = full_output['weights'].keys()
+    pressure = full_output['layer']['pressure']
+    mixingratios = full_output['layer']['mixingratios']
+    to_plot=mixingratios.max().sort_values(ascending=False)[0:limit].keys()
+    
+    cmap = matplotlib.colormaps.get_cmap('magma')
+    cols = cmap(np.linspace(0,0.9,limit))
+     
+    fig, ax = plt.subplots(figsize = (6,6))
+    for mol , c in zip(to_plot,cols):
+        ind = np.where(mol==np.array(molecules))[0][0]
+        f = ax.plot(mixingratios[mol],pressure, color=c, lw=3,
+                    alpha=1.0, label = mol)
+    ax.legend(loc=(1.01,0.0), ncols=2)  
+    ax.set_xlim(1e-20,1e1)
+    ax.set_yscale('log')
+    ax.set_xscale('log')
+    ax.set_ylabel('Pressure [Bars]')
+    ax.set_xlabel('Mixing Ratio [v/v]')
+    ax.invert_yaxis()
+    ax.grid(ls=':')
+    
+    return fig
 
+def PlotCloud(full_output):    
+    from scipy.interpolate import interp1d
+    from matplotlib.colors import LogNorm, Normalize
+
+
+    fig, axes = plt.subplots(nrows=1, ncols=3, sharey=True)
+
+    ax = axes[0]
+    w0 = full_output['layer']['cloud']['w0']
+    im = ax.imshow(w0, aspect=2500, cmap='magma')
+    ax.set_xlabel('Wavelength [um]')
+    ax.set_title('Single Scattering \n Albedo')
+    cax = fig.add_axes([0.145,0.0,0.23,0.04])
+    plt.colorbar(mappable=im, cax=cax, orientation='horizontal')
+    cax.set_xticks([0,0.25,0.5,0.75,1], labels = [0,0.25,0.5,0.75,1], rotation=45)
+
+    n = 5
+    xtickslocs = np.linspace(0,w0.shape[1], n)
+    xticklabels = np.round(np.linspace(0.3,2,n),decimals=1)
+    ax.set_xticks(xtickslocs, labels=xticklabels, rotation=45)
+    ax.invert_yaxis()
+    func = interp1d(np.linspace(-6,2, 1000), np.linspace(0,w0.shape[0],1000))
+    yin = np.flip(np.array([2,1,0,-1,-2,-3,-4,-5,-6]))
+    yticklocs = func(yin)
+    yticklabels = 10.**yin
+    yticklabels = ['{:.0e}'.format(y) for y in yticklabels]
+    ax.set_yticks(yticklocs, labels=yticklabels)
+    ax.set_ylabel('Pressure [bars]')
+    
+
+    ax = axes[1]
+    opd = full_output['layer']['cloud']['opd']
+    im = ax.imshow(opd+1e-60, aspect=2500, cmap='viridis', norm=LogNorm(vmin=1e-5, vmax=np.max(opd)))
+    ax.invert_yaxis()
+    ax.set_xticks(xtickslocs, labels=xticklabels, rotation=45)
+    ax.set_xlabel('Wavelength [um]')
+    ax.set_title('Cloud Optical \n Depth')
+    cax = fig.add_axes([0.44,0.0,0.23,0.04])
+    plt.colorbar(mappable=im, cax=cax, orientation='horizontal', extend='min')
+    caxticks = np.arange(-5,np.floor(np.log10(np.max(opd)))+1,2)
+    #caxticklabels = ['{:.0e}'.format(y) for y in caxticks]
+    expo = [str(c).replace('.0','') for c in caxticks]
+    caxticklabels = ['$10^{'+e+'}$' for e in expo]
+    cax.set_xticks(10**caxticks, labels = caxticklabels, rotation=45)
+
+    ax = axes[2]
+    g0 = full_output['layer']['cloud']['g0']
+    im = ax.imshow(g0+1e-60, aspect=2500, cmap='Greys', norm=Normalize(vmin=0, vmax=1))
+    ax.set_xlabel('Wavelength [um]')
+    ax.set_title('Asymmetry \n Parameter')
+    ax.invert_yaxis()
+    ax.set_xticks(xtickslocs, labels=xticklabels, rotation=45)
+    cax = fig.add_axes([0.73,0.0,0.23,0.04])
+    plt.colorbar(mappable=im, cax=cax, orientation='horizontal')
+    cax.set_xticks([0,0.25,0.5,0.75,1], labels = [0,0.25,0.5,0.75,1], rotation=45)
+
+    plt.tight_layout()
+    
+    return fig
+
+def find_nearest_2d(array,value,axis=1):
+    #small program to find the nearest neighbor in a matrix
+    all_out = []
+    for i in range(array.shape[axis]):
+        ar , iar ,ic = np.unique(array[:,i],return_index=True,return_counts=True)
+        idx = (np.abs(ar-value)).argmin(axis=0)
+        if ic[idx]>1: 
+            idx = iar[idx] + (ic[idx]-1)
+        else: 
+            idx = iar[idx]
+        all_out+=[idx]
+    return all_out
+
+def cumsum(mat):
+    """Function to compute cumsum along axis=0 to bypass numba not allowing kwargs in 
+    cumsum 
+    """
+    new_mat = np.zeros(mat.shape)
+    for i in range(mat.shape[1]):
+        new_mat[:,i] = np.cumsum(mat[:,i])
+    return new_mat
+
+def PlotPhotonAttenuation(full_output, at_tau=0.5, igauss=0):
+    wave = 1e4/full_output['wavenumber']
+
+    dtaugas = full_output['taugas'][:,:,igauss]
+    dtaucld = full_output['taucld'][:,:,igauss]*full_output['layer']['cloud']['w0']
+    dtauray = full_output['tauray'][:,:,igauss]
+    shape = dtauray.shape
+    taugas = np.zeros((shape[0]+1, shape[1]))
+    taucld = np.zeros((shape[0]+1, shape[1]))
+    tauray = np.zeros((shape[0]+1, shape[1]))
+
+    #comptue cumulative opacity
+    taugas[1:,:]=cumsum(dtaugas)
+    taucld[1:,:]=cumsum(dtaucld)
+    tauray[1:,:]=cumsum(dtauray)
+
+    pressure = full_output['level']['pressure']
+
+    at_pressures = np.zeros(shape[1]) #pressure for each wave point
+
+    ind_gas = find_nearest_2d(taugas, at_tau)
+    ind_cld = find_nearest_2d(taucld, at_tau)
+    ind_ray = find_nearest_2d(tauray, at_tau)
+
+    at_pressures_gas = np.zeros(shape[1])
+    at_pressures_cld = np.zeros(shape[1])
+    at_pressures_ray = np.zeros(shape[1])
+
+    for i in range(shape[1]):
+        at_pressures_gas[i] = pressure[ind_gas[i]]
+        at_pressures_cld[i] = pressure[ind_cld[i]]
+        at_pressures_ray[i] = pressure[ind_ray[i]]
+
+    
+    fig,ax = plt.subplots()
+    import matplotlib
+    cmap = matplotlib.colormaps.get_cmap('viridis')
+    colors = cmap(np.linspace(0.2,0.8,3))
+
+    ax.plot(wave,at_pressures_gas, lw=3, color=colors[0], label='Gas Opacity')
+    ax.plot(wave,at_pressures_cld, lw=3, color=colors[1], label='Cloud Opacity')
+    ax.plot(wave,at_pressures_ray, lw=3, color=colors[2], label='Rayleigh Opacity')
+    
+    ax.legend(loc=(1.01,0.1), fontsize=15) 
+    ax.set_yscale('log')
+    ax.invert_yaxis()
+    ax.set_ylabel('Pressure [bars]')
+    ax.set_xlabel('Wavelength [um]')
+    ax.set_ylim(top=1e-6)
+
+    #finally add color sections 
+    gas_dominate_ind = np.where((at_pressures_gas<at_pressures_cld) & (at_pressures_gas<at_pressures_ray))[0]
+    cld_dominate_ind = np.where((at_pressures_cld<at_pressures_gas) & (at_pressures_cld<at_pressures_ray))[0]
+    ray_dominate_ind = np.where((at_pressures_ray<at_pressures_cld) & (at_pressures_ray<at_pressures_gas))[0]
+
+    gas_dominate = np.zeros(shape[1]) + 1e-8
+    cld_dominate = np.zeros(shape[1]) + 1e-8
+    ray_dominate = np.zeros(shape[1])+ 1e-8
+
+    gas_dominate[gas_dominate_ind] = at_pressures_gas[gas_dominate_ind]
+    cld_dominate[cld_dominate_ind] = at_pressures_cld[cld_dominate_ind]
+    ray_dominate[ray_dominate_ind] = at_pressures_ray[ray_dominate_ind]
+    
+    from matplotlib.patches import Rectangle
+    if len(gas_dominate) > 0  :
+        band_x = np.append(np.array(wave), np.array(wave[::-1]))
+        band_y = np.append(np.array(gas_dominate), np.array(gas_dominate)[::-1]*0+1e-8)
+#         for i in gas_dominate_ind:
+#             dw = np.abs(wave[i] - wave[i-1])
+#             rect = Rectangle([wave[i],gas_dominate[i]], dw, gas_dominate[i]-1e6, color=colors[0], alpha=0.3)
+#             ax.add_artist(rect)
+        #ax.fill_between(wave[gas_dominate_ind],gas_dominate[gas_dominate_ind],1e-8, color=colors[0],alpha=0.3)
+        #fig.patch(band_x,band_y, color=Colorblind8[0], alpha=0.3)
+#     if len(cld_dominate) > 0  :
+#         band_x = np.append(np.array(wave), np.array(wave[::-1]))
+#         band_y = np.append(np.array(cld_dominate), np.array(cld_dominate)[::-1]*0+1e-8)
+#         fig.patch(band_x,band_y, color=Colorblind8[3], alpha=0.3)
+#     if len(ray_dominate) > 0  :
+#         band_x = np.append(np.array(wave), np.array(wave[::-1]))
+#         band_y = np.append(np.array(ray_dominate), np.array(ray_dominate)[::-1]*0+1e-8)
+#         fig.patch(band_x,band_y, color=Colorblind8[6], alpha=0.3)
+
+    return fig
+
+
+def PlotCloudTau1DProfile(full_output):
+    press = full_output['layer']['pressure']
+    opd = np.mean(full_output['layer']['cloud']['opd'], axis=1)
+    fig,ax = plt.subplots()
+    ax.plot(opd, press)
+#     try:
+#         plt.axhline(y=press[H2OcrossedDict[str(p)][0]+1], ls=':', color='purple', label='H2O condensation region')
+#         plt.axhline(y=press[H2OcrossedDict[str(p)][1]+1], ls=':', color='purple')
+#     except:
+#         pass
+
+#     plt.axhline(y=press[S8crossedDict[str(p)][0]+1], ls=':', color='orangered', label='S8 condensation region')
+#     plt.axhline(y=press[S8crossedDict[str(p)][1]+1], ls=':', color='orangered')
+
+    ax.set_yscale('log')
+    ax.set_xscale('log')
+    ax.invert_yaxis()
+    #ax.legend(fontsize = 15)
+    return fig
+
+def PlotHeatmapTaus(out, R=0):
+    """
+    Plots a heatmap of the tau fields (taugas, taucld, tauray)
+
+    Parameters
+    ----------
+    out : dict 
+        full_ouput dictionary
+    R : int 
+        Resolution to bin to (if zero, no binning)
+    """
+    titles = ['Gas', 'Cloud', 'Rayleigh']
+    nrow = 1
+    ncol = 3 #at most 3 columns
+    #fig = plt.figure(figsize=(6*ncol,4*nrow))
+    fig, axes = plt.subplots(nrows = nrow, ncols = ncol, sharey = True, figsize=(10,4))
+    for it, itau in enumerate(['taugas','taucld','tauray']):
+        #ax = fig.add_subplot(nrow,ncol,it+1)
+        ax = axes[it]
+        tau_bin = []
+        for i in range(out['full_output'][itau].shape[0]):
+            if R == 0 : 
+                x,y = out['wavenumber'], out['full_output'][itau][i,:,0]
+            else: 
+                from picaso.justdoit import mean_regrid
+                x,y = mean_regrid(out['wavenumber'],
+                                  out['full_output'][itau][i,:,0], R=R)
+            tau_bin += [[y]]
+        tau_bin = np.array(tau_bin)
+        tau_bin[tau_bin==0]=1e-100
+        tau_bin = np.log10(tau_bin)[:,0,:]
+        X,Y = np.meshgrid(1e4/x,out['full_output']['layer']['pressure'])
+        Z = tau_bin
+        pcm=ax.pcolormesh(X, Y, Z,shading='auto',cmap='RdBu_r')
+        #cbar=fig.colorbar(pcm, ax=ax)
+        pcm.set_clim(-3.0, 3.0)
+        #ax.set_title(itau)
+        ax.set_title(titles[it])
+        ax.set_yscale('log')
+        ax.set_ylim([1e2,1e-3])
+        if it == 0:
+            ax.set_ylabel('Pressure(bars)')
+        ax.set_xlabel('Wavelength(um)')
+        #cbar.set_label('log Opacity')
+    cax = fig.add_axes([1.005,0.2,0.015,0.7])
+    cbar = plt.colorbar(mappable=pcm, cax=cax)
+    cbar.set_label('log Opacity')
+    plt.tight_layout()
+        
+    return fig
+
+
+############### Estimating SNR as a function of time from ReflectX models"
+def GetPhotonsPerSec(wavelength, flux, filt, distance, radius, primary_mirror_diameter,
+                    return_ergs_flux_times_filter = False, Omega = None):
+    ''' Given a spectrum with wavelengths in um and flux in ergs cm^-1 s^-1 cm^-2, convolve 
+    with a filter transmission curve and return photon flux in photons/sec. 
+    Following eqns in Chp 7 of my thesis
+    
+    Args:
+        wavelength [arr]: wavelength array in um
+        flux [arr]: flux array in ergs cm^-1 s^-1 cm^-2 from the surface of the object (NOT corrected for distance)
+        filt [myastrotools filter object]: filter
+        distance [astropy unit object]: distance to star with astropy unit
+        radius [astropy unit object]: radius of star or planet with astropy unit
+        primary_mirror_diameter [astropy unit object]: primary mirror diameter with astropy unit
+        return_ergs_flux [bool]: if True, return photons/sec and the flux in ergs cm^-1 s^-1 cm^-2
+                                convolved with the filter
+    Returns
+        astropy units object: flux in photons/sec
+        
+    '''
+    import astropy.constants as const
+    # energy in ergs:
+    energy_in_ergs_per_photon_per_wavelength = const.h.cgs * const.c.cgs / wavelength # Eqn 7.14
+    # Flux in photons/cm s cm^2: number of photons per area per sec per lambda:
+    nphotons_per_wavelength = flux / energy_in_ergs_per_photon_per_wavelength # Eqn 7.15
+    
+    # Combine flux with filter curve:
+    w = filt.wavelength*filt.wavelength_unit.to(u.um)
+    t = filt.transmission
+    # make interpolation function:
+    ind = np.where((wavelength > min(w)) & (wavelength < max(w)))[0]
+    # of spectrum wavelength and Flux in photons/cm s cm^2:
+    from scipy.interpolate import interp1d
+    f = interp1d(wavelength[ind], nphotons_per_wavelength[ind], fill_value="extrapolate")
+    # interpolate the filter flux onto the spectrum wavelength grid:
+    flux_on_filter_wavelength_grid = f(w)
+
+    # multiply flux time filter transmission
+    filter_times_flux = flux_on_filter_wavelength_grid * t # F_l x R(l) in eqn 7.16
+    
+    # Now sum:
+    dl = (np.mean([w[j+1] - w[j] for j in range(len(w)-1)]) * u.um).to(u.cm)
+
+    total_flux_in_filter = np.sum(filter_times_flux * dl.value) # Eqn 7.16
+    
+    
+    area_of_primary = np.pi * ((0.5*primary_mirror_diameter).to(u.cm))**2
+
+    #Total flux in photons/sec:
+    total_flux_in_photons_sec = total_flux_in_filter * area_of_primary.value # Eqn 7.17
+    
+    if return_ergs_flux_times_filter:
+        f = interp1d(wavelength[ind], flux[ind], fill_value="extrapolate")
+        # interpolate the filter flux onto the spectrum wavelength grid:
+        flux_ergs_on_filter_wavelength_grid = f(w)
+        filter_times_flux_ergs = flux_ergs_on_filter_wavelength_grid * t
+        
+        return total_flux_in_photons_sec * (1/u.s), filter_times_flux_ergs, w
+    return total_flux_in_photons_sec * (1/u.s)
+
+def GetGuideStarMagForIasTableLookup(actual_star_magnitude):
+    # Tables are available for these guide star mags:
+    available_mags = np.array(['0', '2.5', '5', '7', '9', '10', '11',
+                        '11.5', '12', '12.5', '13','13.5', '14', '14.5', '15'])
+    available_mags = np.array([float(m) for m in available_mags])
+    # find the one closest to actual guidestar mag:
+    idx = (np.abs(available_mags - actual_star_magnitude)).argmin()
+    table_guidestarmag = str(available_mags[idx]).replace('.0','')
+    return table_guidestarmag
+
+def Get_LOD_in_mas(central_wavelength, D):
+    ''' Return lambda/D in mas mas for a filter and primary diameter
+    Args:
+        central_wavelength (flt, astropy units object): wavelength of filter
+        D (flt, astropy units object): primary diameter
+    Returns:
+        flt: lambda over D in mas
+    '''
+    central_wavelength = central_wavelength.to(u.um)
+    D = D.to(u.m)
+    lod = 0.206*central_wavelength.value/D.value
+    lod = lod*u.arcsec.to(u.mas)
+    return lod
+
+def GetIasFromTable(guidestarmag, wfc, sep, pa, 
+                   path_to_maps = '/Users/loganpearce/Dropbox/astro_packages/myastrotools/myastrotools/GMagAO-X-noise/'):
+    ''' For a given guide star magnitude and wfc, look up the value of the atmospheric speckle
+        contribution I_as (Males et al. 2021 eqn 6) at a given separation and position angle
+        
+    Args:
+        guidestarmag (flt or str): Guide star magnitude. Must be: ['0', '2.5', '5', '7', '9', '10', '11',
+                        '11.5', '12', '12.5', '13','13.5', '14', '14.5', '15']
+        wfc (str): wavefront control set up.  Either linear predictive control "lp" or simple integrator "si"
+        sep (flt): separation in lambda/D
+        pa (flt): position angle in degrees
+    
+    Returns:
+        flt: value of I_as at that location
+    '''
+    IasMap = fits.getdata(path_to_maps+f'varmap_{guidestarmag}_{wfc}.fits')
+    center = [0.5*(IasMap.shape[0]-1),0.5*(IasMap.shape[1]-1)]
+    dx = sep * np.cos(np.radians(pa + 90))
+    dy = sep * np.sin(np.radians(pa + 90))
+    if int(np.round(center[0]+dx, decimals=0)) < 0:
+        return np.nan
+    try:
+        return IasMap[int(np.round(center[0]+dx, decimals=0)),int(np.round(center[1]+dy,decimals=0))]
+    except IndexError:
+        return np.nan
+
+def GetIas(guidestarmag, wfc, sep, pa, wavelength, 
+           path_to_maps = '/Users/loganpearce/Dropbox/astro_packages/myastrotools/myastrotools/GMagAO-X-noise/'):
+    '''For a given guide star magnitude, wfc, and planet-star contrast, get the SNR
+        in the speckle-limited regime (Eqn 10 of Males et al. 2021)
+        at a given separation and position angle.
+        
+    Args:
+        guidestarmag (flt or str): Guide star magnitude. Must be: ['0', '2.5', '5', '7', '9', '10', '11',
+                        '11.5', '12', '12.5', '13','13.5', '14', '14.5', '15']
+        wfc (str): wavefront control set up.  Either linear predictive control "lp" or simple integrator "si"
+        sep (flt): separation in lambda/D
+        pa (flt): position angle in degrees
+        Cp (flt): planet-star contrast
+        deltat (flt): observation time in sec
+        wavelength (astropy units object):  central wavelength of filter band
+        tau_as (flt): lifetime of atmospheric speckles in sec. Default = 0.02, ave tau_as for 24.5 m telescope
+                from Males et al. 2021 Fig 10
+    
+    Returns:
+        flt: value of I_as at that location
+    '''
+    from astropy.io import fits
+    ## Load map:
+    # IasMap = fits.getdata(path_to_maps+f'contrast_{guidestarmag}_{wfc}.fits')
+    IasMap = fits.getdata(path_to_maps+f'varmap_{guidestarmag}_{wfc}.fits')
+    
+    # Look up Ias from table
+    Ias = GetIasFromTable(guidestarmag, wfc, sep, pa, path_to_maps = path_to_maps)
+    # Correct for differnce in wavelength between lookup table and filter wavelength:
+    wavelength = wavelength.to(u.um)
+    Ias = Ias * (((0.8*u.um/wavelength))**2).value
+    if np.isnan(Ias):
+        raise Exception('Sep/PA is outside noise map boundaries')
+    else:
+        return Ias
+    
+def ComputeSignalSNR(Ip, Is, Ic, Ias, Iqs, tau_as, tau_qs, deltat, strehl, QE, flux_in_core,
+                           RN = None, Isky = None, Idc = None, texp = None):
+    ''' Get S/N for a planet signal when speckle noise dominated. Using eqns in Chap 7 of
+    my thesis.
+
+    Args:
+        Ip [flt]: planet signal in photons/sec
+        Istar [flt]: star signal in photons/sec
+        Ic [flt]: fractional contribution of intensity from residual dirraction from coronagraph
+        Ias [flt]: contribution from atm speckles
+        Iqs [flt]: fraction from quasistatic speckles
+        tau_as [flt]: average lifetime of atm speckles
+        tau_qs [flt]: average liftetim of qs speckles
+        deltat [flt]: observation time in seconds
+        RN [flt]: read noise
+        Isky [flt]: sky intensity in photons/sec
+        Idc [flt]: dark current in photons/sec
+        texp [flt]: time for single exposure in sec (required only for RN term)
+
+    Returns:
+        flt: signal to noise ratio
+    '''
+    # When using the contrast Ias maps, Strelh applies to the numerator but not denom
+    # (Males, priv. comm.)
+    signal = Ip * deltat * strehl * QE * flux_in_core # Eqn 7.20
+    
+    Istar = Is * QE * flux_in_core
+    photon_noise = Ic + Ias + Iqs
+    atm_speckles = Istar * ( tau_as * (Ias**2 + 2*(Ic*Ias + Ias*Iqs)) )
+    qs_speckles = Istar * ( tau_qs * (Iqs**2 + 2*Ic*Iqs) )
+    
+    Ipstar = Ip *  strehl * QE * flux_in_core
+    
+    sigma_sq_h = Istar * deltat * (photon_noise + atm_speckles + qs_speckles) + signal # Eqn 7.19
+    
+    if RN is not None:
+        skyanddetector = Isky*deltat + Idc*deltat + (RN * deltat/texp)**2
+        noise = np.sqrt(sigma_sq_h + skyanddetector)
+    else:
+        noise = np.sqrt(sigma_sq_h)
+        
+    return signal / noise
+
+
+
+def GetSNR(wavelength, planet_contrast, 
+           star_flux,
+           primary_mirror_diameter, 
+           planet_radius, star_radius, 
+           distance, sep, wfc,
+           filters, observationtime,
+           Ic = 1e-20,
+           Iqs = 1e-20,
+           tau_as = 0.02, # sec, from Fig 10 in Males+ 2021
+           tau_qs = 0.05,
+           RN = None, Isky = None, Idc = None, texp = None, pa = None,
+           MagAOX = False,
+           path_to_maps = '/Users/loganpearce/Dropbox/astro_packages/myastrotools/myastrotools/GMagAO-X-noise/'
+          ):
+    
+    '''Compute S/N as a function of time for a ReflectX model in specific filters.
+    
+    Args:
+        wavelength (arr): array of wavelengths for planet and star spectrum
+        planet_contrast (arr): array of planet flux values on wavelength grid
+        star_flux (arr): array of star flux on wavelength grid
+        primary_mirror_diameter (astropy unit object): mirrior diameter. Ex: 25.4*u.m
+        planet_radius (astropy unit object): planet radius
+        star_radius (astropy unit object): star radius
+        distance (astropy unit object): distance to star
+        sep (astropy unit object): planet-star separation
+        wfc (str): wavefront control. Either 'lp' or 'si'
+        filters (filter object): list of filter objects to compute snr for
+        observationtime (arr): array of exposure times
+    
+    '''
+    
+    ## 1. Compute star's observed flux from model intensity and compute star's magnitude:
+    star_flux = star_flux * ComputeOmega(distance, star_radius)
+    star_mag = []
+    for i in range(len(filters)):
+        filt = filters[i]
+        star_mag.append(GetStarMagnitude(star_wavelength, star_flux, filt))
+        
+    ## 2. Get planet flux from model contrast and distance-corrected star flux:
+    planet_flux = star_flux * planet_contrast
+    
+    ## 3. Compute planet and star signal in photons/sec/lambda/D in each filter:
+    planet_signal = []
+    for filt in filters:
+        planet_signal.append(GetPhotonsPerSec(wavelength, planet_flux, filt, distance, 
+                                              planet_radius, primary_mirror_diameter).value)
+    planet_signal = np.array(planet_signal)
+    
+    star_signal = []
+    for filt in filters:
+        star_signal.append(GetPhotonsPerSec(wavelength, star_flux, filt, distance, 
+                                            star_radius, primary_mirror_diameter).value)
+    star_signal = np.array(star_signal)
+    
+    ## 4. Get atmospheric speckle intensity I_as at planet location using maps from Males et al. 2021:
+    # Find relevant table:
+    star_gsm_for_Ias_tables = []
+    for i,filt in enumerate(filters):
+        star_gsm_for_Ias_tables.append(GetGuideStarMagForIasTableLookup(star_mag[i]))
+    # Get location of planet signal:
+    sep_au = sep.to(u.au)
+    sep_mas = (sep_au.value/distance.value)*u.arcsec.to(u.mas)
+    lods_in_mas = [Get_LOD_in_mas(f.central_wavelength*f.wavelength_unit, primary_mirror_diameter) 
+                   for f in filters]
+    sep_lods = [sep_mas/lod for lod in lods_in_mas]
+    if pa is not None:
+        pass
+    else:
+        pa = 90 # deg
+    # Lookup Ias:
+    Ias = []
+    for i in range(len(filters)):
+        wavelength = filters[i].central_wavelength*filters[i].wavelength_unit
+        Ias.append(GetIas(star_gsm_for_Ias_tables[i], wfc, sep_lods[i], pa, wavelength))
+    Ias = np.array(Ias)
+    
+    ## 5. Compute throughput:
+    # 5a. Get QE (encompasses telescope and instrument throughput):
+    if not MagAOX:
+        QE = [0.1]*len(filters)
+    else:
+        QE = [0.13, 0.12, 0.06, 0.04, 0.1, 0.1]
+    # 5b. Get Strehl ratio:
+    strehl_table = pd.read_table(path_to_maps+f'strehl_{wfc}.txt', 
+                                 delim_whitespace=True, names=['mag','strehl'])
+    from scipy.interpolate import interp1d
+    strehl_table2 = strehl_table.drop([4])
+    strehl_table2 = strehl_table2.reset_index(drop=True)
+    available_mags = np.array([float(m) for m in strehl_table2['mag']])
+    func = interp1d(available_mags, strehl_table2['strehl'])
+    strehls = []
+    for i in range(len(filters)):
+        strehl = func(star_mag[i])
+        # scale for wavelength from strehl at 800 nm to filter central wavelength:
+        wavelength = filters[i].central_wavelength*filters[i].wavelength_unit
+        wavelength = wavelength.to(u.um)
+        strehl = strehl * (((0.8*u.um/wavelength))**2).value
+        strehls.append(strehl)
+    # 5c. Amount of star flux in Airy core:
+    star_flux_in_Airy_core_multiple = np.pi/4
+    
+    ## 6. Compute signal to noise ratios
+    if type(observationtime) == np.ndarray:
+        # For an array of times:
+        all_snrs = []
+        for i in range(len(filters)):
+            snrs = []
+            for t in observationtime:
+                snrs.append(ComputeSignalSNR(planet_signal[i], star_signal[i], 
+                                             Ic, Ias[i], Iqs, tau_as, tau_qs, t,
+                                             strehls[i], QE[i], star_flux_in_Airy_core_multiple,
+                                   RN = None, Isky = None, Idc = None, texp = None))
+            all_snrs.append(snrs)
+        return all_snrs, planet_signal, star_signal
+    else:
+        # for a single time:
+        snrs = []
+        for i in range(len(filters)):
+            snrs.append(ComputeSignalSNR(planet_signal[i], star_signal[i], Ic, Ias[i], Iqs, tau_as, tau_qs, 
+                                observationtime, strehl[i], QE[i], star_flux_in_Airy_core_multiple,
+                                RN = RN, Isky = Isky, Idc = Idc, texp = texp))
+        return snrs
